@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.cloudflare/
+.dev.vars
+.env
+.env.*
+!.env.example
+secrets*.json
+*.log
+ios/*.xcodeproj/
+ios/build/
+*.ipa
+*.p12
+*.mobileprovision
+*.xcarchive/

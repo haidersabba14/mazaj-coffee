@@ -1,0 +1,28 @@
+name: Deploy to Cloudflare
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+      TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+      EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Require configuration
+        run: |
+          test -n "$D1_DATABASE_ID"
+          test -n "$TURNSTILE_SITE_KEY"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - run: npx cf d1 migrations apply "$D1_DATABASE_ID"
+      - run: npm run deploy
