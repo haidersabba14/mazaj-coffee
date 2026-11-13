@@ -30,10 +30,19 @@ async function rate(env,key,max,seconds){
 }
 async function body(req){if(!(req.headers.get('content-type')||'').includes('application/json'))fail('نوع طلب غير مقبول',415);const reader=req.body?.getReader();let size=0,parts=[];if(!reader)fail('بيانات مفقودة');while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>16000){await reader.cancel();fail('الطلب كبير جدًا',413);}parts.push(value);}try{return JSON.parse(new TextDecoder().decode(new Uint8Array(parts.flatMap(p=>Array.from(p)))));}catch{fail('بيانات غير صالحة');}}
 function text(v,min,max){if(typeof v!=='string'||v.trim().length<min||v.trim().length>max)fail('يرجى التحقق من البيانات المدخلة');return v.trim();}
+async function appAccess(req,env){
+ const token=req.headers.get('X-Mazaj-App-Key');
+ if(!env.ADMIN_APP_TOKEN||!token||token.length>128)fail('الصفحة غير موجودة',404);
+ const a=await hash(token),b=await hash(env.ADMIN_APP_TOKEN);let diff=0;
+ for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);
+ if(diff)fail('الصفحة غير موجودة',404);
+}
 async function admin(req,env){const token=(req.headers.get('cookie')||'').match(/(?:^|; )session=([a-f0-9]{64})(?:;|$)/)?.[1];if(!token||!await env.DB.prepare('SELECT 1 FROM sessions WHERE token_hash=? AND expires>?').bind(await hash(token),now()).first())fail('يرجى تسجيل الدخول',401);}
 async function checkTurnstile(req,env,token){if(!env.TURNSTILE_SECRET||!env.TURNSTILE_SITE_KEY||!env.RATE_SALT)fail('استقبال الطلبات غير مهيأ بعد.',503);const response=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',body:new URLSearchParams({secret:env.TURNSTILE_SECRET,response:text(token,1,2048),remoteip:req.headers.get('CF-Connecting-IP')||''}),signal:AbortSignal.timeout(10000)});const result=await response.json();if(!result.success||result.hostname!==new URL(req.url).hostname||result.action!=='checkout')fail('تعذر التحقق الأمني، أعد المحاولة.',403);}
 async function route(req,env,ctx){
  const url=new URL(req.url),p=url.pathname,m=req.method;const ip=req.headers.get('CF-Connecting-IP')||'local';
+ if(/^\/admin(?:[./]|$)/i.test(p))fail('الصفحة غير موجودة',404);
+ if(p==='/api/login'||p.startsWith('/api/admin/'))await appAccess(req,env);
  if(!p.startsWith('/api/'))return env.ASSETS.fetch(req);
  if(!env.DB)fail('قاعدة البيانات غير مهيأة',503);
  if(!['GET','HEAD'].includes(m)&&req.headers.get('Origin')!==url.origin)fail('مصدر الطلب غير مقبول',403);
