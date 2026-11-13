@@ -13,3 +13,5 @@ ios/build/
 *.p12
 *.mobileprovision
 *.xcarchive/
+
+.wrangler/
