@@ -4,7 +4,7 @@ import Security
 
 private let cafeBase = URL(string: "https://mazaj-coffee.haider-sabba.workers.dev")!
 private let gold = Color(red: 0.83, green: 0.70, blue: 0.51)
-private let background = Color(red: 0.07, green: 0.065, blue: 0.055)
+private let cafeBackground = Color(red: 0.07, green: 0.065, blue: 0.055)
 
 @main
 struct MazajAdminApp: App {
@@ -171,7 +171,7 @@ struct AdminRoot: View {
                 }
             } else { LoginScreen(model: model) }
         }
-        .background(background)
+        .background(cafeBackground)
         .task { await model.refresh() }
         .onReceive(timer) { _ in if phase == .active && model.loggedIn { Task { await model.refresh() } } }
         .onChange(of: phase) { _, next in if next == .active && model.loggedIn { Task { await model.refresh() } } }
