@@ -6,7 +6,7 @@
 
 ## البناء من GitHub
 
-يوجد Workflow يدوي باسم **Build signed iPhone IPA** في `.github/workflows/ios.yml`. لم يُشغّل، ولم تُبنَ IPA أو تُختبر SwiftUI على Xcode في بيئة Linux هذه. يلزم رفع المصدر إلى مستودع GitHub قابل للكتابة أولًا.
+يوجد Workflow يدوي باسم **Build iPhone IPA** في `.github/workflows/ios.yml`. الوضع الافتراضي يبني ملف IPA **غير موقّع** دون أسرار؛ يحتاج توقيعًا موثوقًا قبل تثبيته. خيار signed يبني للتوزيع على الأجهزة المسجلة عند تهيئة شهادات Apple. لم يُختبر على جهاز iPhone فعلي في هذه البيئة.
 
 لإخراج IPA قابلة للتثبيت على أجهزة مسجّلة:
 
@@ -14,7 +14,7 @@
 2. في GitHub Settings → Secrets and variables → Actions أضف Variables: `APP_BUNDLE_ID` (مثل `com.yourname.mazajadmin`) و`APPLE_TEAM_ID`.
 3. أضف Secrets: `APPLE_CERTIFICATE_P12_B64` (الشهادة P12 بترميز Base64)، و`APPLE_CERTIFICATE_PASSWORD`، و`APPLE_PROFILE_B64` (ملف mobileprovision بترميز Base64). أدخلها مباشرة في GitHub، ولا ترسلها في الدردشة ولا ترفعها كملفات إلى المستودع.
 4. راجع حصة GitHub Actions المجانية لحسابك قبل التشغيل. macOS يستهلك حصة أكبر من Linux؛ Workflow يدوي ولا يبدأ على كل push. لا تفعّل تجاوزات مدفوعة.
-5. Actions → Build signed iPhone IPA → Run workflow. بعد نجاحه تُنزّل `MazajAdmin-IPA` من Artifacts خلال ٣ أيام. التوقيع Ad Hoc يعمل فقط على الأجهزة المدرجة في profile، وليس على كل أجهزة العالم. لا يتم النشر على App Store أو TestFlight تلقائيًا.
+5. Actions → Build iPhone IPA → Run workflow، وفعّل signed فقط عند توفير الشهادات. بعد نجاحه تُنزّل `MazajAdmin-IPA` من Artifacts خلال ٣ أيام. التوقيع Ad Hoc يعمل فقط على الأجهزة المدرجة في profile، وليس على كل أجهزة العالم. لا يتم النشر على App Store أو TestFlight تلقائيًا.
 6. ثبّت على الجهاز المسجّل بأدوات Apple المناسبة مثل Apple Configurator أو Xcode، ثم أدخل رابط Worker المنشور. غيّر الإعداد من ترس التطبيق عند تغيير الرابط. عنوان الاتصال ليس سرًا؛ لا تضع كلمة مرور ضمن الرابط.
 
 ## على Mac محلي
@@ -31,3 +31,5 @@ open MazajAdmin.xcodeproj
 اختر فريقك والتوقيع المناسب داخل Xcode، وابنِ على جهازك. للتوزيع استخدم Product → Archive ثم Distribute App مع profile الصحيح. إصدار Xcode قد يحتاج تعديل نوع التصدير `release-testing` إذا تغيّرت تسمية خيارات Apple.
 
 لا تُرفع الشهادة أو ملف provisioning أو IPA الموقّعة إلى ملفات Git. لا تتضمن النسخة رموز Apple/APNs. الربط الحالي محصور في HTTPS ونطاق المقهى الذي تحفظه؛ أضف فقط نطاقًا تملكه وتثق به.
+
+النسخة غير الموقعة تبني التطبيق وتنتج ملف IPA فقط؛ ليست ملفًا صالحًا للتثبيت مباشرة. لم نستخدم أي خدمة توقيع خارجية. الرابط الافتراضي في التطبيق هو رابط Worker المنشور أعلاه.

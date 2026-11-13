@@ -1,8 +1,14 @@
-name: Build signed iPhone IPA
+name: Build iPhone IPA
 on:
   workflow_dispatch:
+    inputs:
+      signed:
+        description: Build signed IPA (requires Apple certificates)
+        type: boolean
+        default: false
 jobs:
   archive:
+    if: ${{ inputs.signed }}
     runs-on: macos-latest
     timeout-minutes: 25
     env:
@@ -61,3 +67,28 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/mazaj.keychain-db" || true
           rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/profile.mobileprovision" "$RUNNER_TEMP/profile.plist" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+  unsigned:
+    if: ${{ !inputs.signed }}
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID || 'com.mazaj.coffee.admin' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: command -v xcodegen || brew install xcodegen
+      - name: Build iOS app without signing
+        working-directory: ios
+        run: |
+          xcodegen generate
+          xcodebuild -project MazajAdmin.xcodeproj -scheme MazajAdmin -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build build CODE_SIGNING_ALLOWED=NO
+          mkdir -p build/ipa/Payload
+          cp -R build/Build/Products/Release-iphoneos/MazajAdmin.app build/ipa/Payload/
+          cd build/ipa
+          zip -qry MazajAdmin-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MazajAdmin-UNSIGNED-IPA-needs-signing
+          path: ios/build/ipa/MazajAdmin-unsigned.ipa
+          retention-days: 7

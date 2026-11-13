@@ -9,7 +9,7 @@ struct MazajAdminApp: App {
 }
 
 struct AdminHome: View {
-    @AppStorage("cafeURL") private var savedURL = ""
+    @AppStorage("cafeURL") private var savedURL = "https://mazaj-coffee.haider-sabba.workers.dev"
     @State private var draftURL = ""
     @State private var editing = false
     @State private var message = ""
