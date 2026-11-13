@@ -1,6 +1,5 @@
 import SwiftUI
 import Foundation
-import Security
 
 private let cafeBase = URL(string: "https://mazaj-coffee.haider-sabba.workers.dev")!
 private let gold = Color(red: 0.83, green: 0.70, blue: 0.51)
@@ -13,28 +12,6 @@ struct MazajAdminApp: App {
             AdminRoot().environment(\.layoutDirection, .rightToLeft)
                 .preferredColorScheme(.dark).tint(gold)
         }
-    }
-}
-
-private enum DeviceKey {
-    static let service = "com.mazaj.admin.device"
-    static func load() -> String {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "activation",
-            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var value: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &value) == errSecSuccess,
-              let data = value as? Data else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-    static func save(_ key: String) -> Bool {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "activation"]
-        SecItemDelete(query as CFDictionary)
-        var values = query
-        values[kSecValueData as String] = Data(key.utf8)
-        values[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        return SecItemAdd(values as CFDictionary, nil) == errSecSuccess
     }
 }
 
@@ -86,7 +63,6 @@ final class AdminModel: ObservableObject {
     @Published var query = ""
     @Published var status = ""
     @Published var dateFilter = ""
-    var appKey = DeviceKey.load()
     private var seen = Set<String>()
     private var loaded = false
 
@@ -99,7 +75,6 @@ final class AdminModel: ObservableObject {
         }
         guard let url = parts.url else { throw AdminError(message: "تعذر الاتصال") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25)
-        request.setValue(appKey, forHTTPHeaderField: "X-Mazaj-App-Key")
         request.setValue("https://" + (cafeBase.host ?? ""), forHTTPHeaderField: "Origin")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let payload {
@@ -112,19 +87,16 @@ final class AdminModel: ObservableObject {
         if response.statusCode == 401 { loggedIn = false }
         guard (200...299).contains(response.statusCode) else {
             let server = try? JSONDecoder().decode(ErrorReply.self, from: body)
-            throw AdminError(message: response.statusCode == 404 ? "رمز تفعيل الجهاز غير صحيح أو يحتاج إلى تحديث." : server?.error ?? "تعذر إتمام العملية، حاول مجددًا.")
+            throw AdminError(message: server?.error ?? "تعذر إتمام العملية، حاول مجددًا.")
         }
         return body
     }
-    func login(password: String, activation: String) async {
+    func login(password: String) async {
         guard !busy else { return }
-        let candidate = activation.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate.count == 64, candidate.allSatisfy({ $0.isHexDigit }) else { error = "أدخل رمز تفعيل التطبيق الخاص بك أولًا."; return }
-        busy = true; error = ""; appKey = candidate
+        busy = true; error = ""
         defer { busy = false }
         do {
             _ = try await call("login", payload: ["password": password])
-            guard DeviceKey.save(candidate) else { throw AdminError(message: "تعذر حفظ تفعيل الجهاز بأمان.") }
             try await fetchData()
         } catch { self.error = error.localizedDescription }
     }
@@ -136,7 +108,7 @@ final class AdminModel: ObservableObject {
         data = result; loggedIn = true
     }
     func refresh() async {
-        guard !busy, !appKey.isEmpty else { return }
+        guard !busy else { return }
         busy = true; defer { busy = false }
         do { try await fetchData(); error = "" }
         catch { if loggedIn { self.error = error.localizedDescription } }
@@ -180,7 +152,6 @@ struct AdminRoot: View {
 
 struct LoginScreen: View {
     @ObservedObject var model: AdminModel
-    @State private var activation = DeviceKey.load()
     @State private var password = ""
     var body: some View {
         NavigationStack {
@@ -193,14 +164,12 @@ struct LoginScreen: View {
                     }.padding(.vertical, 20)
                 }
                 Section("دخول المسؤول") {
-                    SecureField("رمز تفعيل الجهاز", text: $activation)
-                        .textContentType(.none).autocorrectionDisabled().textInputAutocapitalization(.never)
                     SecureField("كلمة مرور الإدارة", text: $password).textContentType(.password)
-                    Button { Task { await model.login(password: password, activation: activation); password = "" } } label: {
+                    Button { Task { await model.login(password: password); password = "" } } label: {
                         HStack { Text("تسجيل الدخول"); Spacer(); if model.busy { ProgressView() } else { Image(systemName: "arrow.left") } }
                     }.disabled(model.busy || password.isEmpty)
                 }
-                Section { Text("رمز التفعيل خاص بجهاز الإدارة ويُحفظ بأمان بعد أول دخول. لا يوجد موقع العملاء داخل التطبيق.").font(.caption).foregroundStyle(.secondary) }
+                Section { Text("دخول إدارة المقهى بكلمة المرور فقط. لا يوجد موقع العملاء داخل التطبيق.").font(.caption).foregroundStyle(.secondary) }
                 if !model.error.isEmpty { Section { Text(model.error).foregroundStyle(.red) } }
             }.navigationTitle("أهلًا بمزاجك")
         }
@@ -369,7 +338,7 @@ struct SettingsScreen: View {
                     Text("تصل الطلبات أثناء فتح التطبيق بتحديث تلقائي كل ٣٠ ثانية. اسحب صفحة الطلبات للتحديث فورًا. الإشعارات والتطبيق مغلق غير مفعّلة بعد.").font(.caption)
                     Text("حالة البريد تعني قبول مزوّد الإرسال، وليست تأكيد وصول الرسالة إلى صندوق الوارد.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("الخصوصية") { Text("بيانات الطلبات محفوظة لمدة ٣٠ يومًا. رمز تفعيل هذا الجهاز محفوظ في Keychain ولا يُنشر في كود التطبيق.").font(.caption) }
+                Section("الخصوصية") { Text("بيانات الطلبات محفوظة لمدة ٣٠ يومًا. كلمة المرور لا تُحفظ في كود التطبيق.").font(.caption) }
                 Button("تسجيل الخروج", role: .destructive) { Task { await model.logout() } }
             }
             .navigationTitle("إدارة المقهى")
