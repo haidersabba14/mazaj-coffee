@@ -70,3 +70,8 @@ test('خمس ختمات من الإدارة تمنح مشروبين، والاس
 });
 
 test('الحليب كامل الدسم فقط',async()=>{const r=await request('orders',{...order(),customization:{milk:'oat'}});assert.equal(r.status,400);});
+test('المتابعة المتكررة لطلب صحيح لا تتوقف عند حد المحاولات الخاطئة',async()=>{
+ await db.prepare('UPDATE settings SET accepting=1,opening_hour=0,all_free=1').run();
+ const b=order();assert.equal((await request('orders',b)).status,201);
+ for(let i=0;i<25;i++)assert.equal((await request('track',{id:b.id,token:b.token})).status,200);
+});
