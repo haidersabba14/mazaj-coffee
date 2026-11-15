@@ -1,7 +1,10 @@
 import SwiftUI
 import Foundation
+import MapKit
+import AudioToolbox
+import VisionKit
 
-private let cafeBase = URL(string: "https://mazaj-coffee.haider-sabba.workers.dev")!
+private let cafeBase = URL(string: "https://mazaj-cafe-995.pages.dev")!
 private let gold = Color(red: 0.83, green: 0.70, blue: 0.51)
 private let cafeBackground = Color(red: 0.07, green: 0.065, blue: 0.055)
 
@@ -22,6 +25,9 @@ struct CoffeeOrder: Decodable, Identifiable {
     let id: String; let name: String; let phone: String; let notes: String
     let items: [DrinkLine]; let status: String; let created_at: Double
     let email_status: String; let email_attempts: Int; let total: Int
+    let fulfillment: String?; let location_lat: Double?; let location_lng: Double?; let address: String?
+    let estimated_ready_at: Double?; let rejection_reason: String?
+    let customization: [String:String]?
 }
 struct Drink: Decodable, Identifiable {
     let id: String; let name: String; let description: String
@@ -30,6 +36,9 @@ struct Drink: Decodable, Identifiable {
 struct ShopSettings: Decodable { let accepting: Int; let opening_hour: Int }
 struct Statistics: Decodable { let daily: Int?; let weekly: Int? }
 struct PopularDrink: Decodable { let name: String; let quantity: Int }
+struct LoyaltyCard: Decodable {
+    let id: String; let card_number: String; let name: String; let stamps: Int; let reward_drinks: Int; let total_stamps: Int; let remaining: Int
+}
 struct AdminData: Decodable {
     let orders: [CoffeeOrder]; let stats: Statistics; let popular: [PopularDrink]
     let products: [Drink]; let settings: ShopSettings
@@ -60,6 +69,9 @@ final class AdminModel: ObservableObject {
     @Published var error = ""
     @Published var notice = ""
     @Published var data: AdminData?
+    @Published var loyalty: LoyaltyCard?
+    @Published var cardNumber = ""
+    private var stampEvents: [String:String] = [:]
     @Published var query = ""
     @Published var status = ""
     @Published var dateFilter = ""
@@ -73,6 +85,7 @@ final class AdminModel: ObservableObject {
         if path == "admin/data" {
             parts.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "status", value: status), URLQueryItem(name: "date", value: dateFilter)]
         }
+        if path == "admin/cards" { parts.queryItems = [URLQueryItem(name: "number", value: cardNumber)] }
         guard let url = parts.url else { throw AdminError(message: "تعذر الاتصال") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25)
         request.setValue("https://" + (cafeBase.host ?? ""), forHTTPHeaderField: "Origin")
@@ -103,7 +116,7 @@ final class AdminModel: ObservableObject {
     private func fetchData() async throws {
         let result = try JSONDecoder().decode(AdminData.self, from: await call("admin/data"))
         let unseen = result.orders.filter { !seen.contains($0.id) && $0.status == "new" }
-        if loaded && !unseen.isEmpty { notice = "☕ وصلت طلبات بانتظار قبولك: \(unseen.count)" }
+        if loaded && !unseen.isEmpty { notice = "☕ وصلت طلبات بانتظار قبولك: \(unseen.count)"; if UserDefaults.standard.object(forKey: "orderSound") as? Bool ?? true { AudioServicesPlaySystemSound(1007) } }
         seen.formUnion(result.orders.map(\.id)); loaded = true
         data = result; loggedIn = true
     }
@@ -118,6 +131,28 @@ final class AdminModel: ObservableObject {
         busy = true; error = ""; defer { busy = false }
         do { _ = try await call("admin/" + endpoint, payload: payload); try await fetchData(); return true }
         catch { self.error = error.localizedDescription; return false }
+    }
+    func findCard() async {
+        guard !busy else { return }; busy = true; error = ""; defer { busy = false }
+        cardNumber = cardNumber.replacingOccurrences(of: "MAZAJ:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        do { loyalty = try JSONDecoder().decode(LoyaltyCard.self, from: await call("admin/cards")) }
+        catch { self.error = error.localizedDescription; loyalty = nil }
+    }
+    func stampCard() async {
+        guard !busy, let card = loyalty else { return }; busy = true; error = ""; defer { busy = false }
+        let event = stampEvents[card.id] ?? UUID().uuidString.lowercased(); stampEvents[card.id] = event
+        do { loyalty = try JSONDecoder().decode(LoyaltyCard.self, from: await call("admin/stamp", payload: ["id":card.id,"event_id":event])); stampEvents.removeValue(forKey: card.id) }
+        catch { self.error = error.localizedDescription }
+    }
+    func scanAndStamp(_ raw: String) async {
+        guard !busy else { return }; busy = true; error = ""; defer { busy = false }
+        cardNumber = raw.replacingOccurrences(of: "MAZAJ:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let card = try JSONDecoder().decode(LoyaltyCard.self, from: await call("admin/cards"))
+            let event = stampEvents[card.id] ?? UUID().uuidString.lowercased(); stampEvents[card.id] = event
+            loyalty = try JSONDecoder().decode(LoyaltyCard.self, from: await call("admin/stamp", payload: ["id":card.id,"event_id":event]))
+            stampEvents.removeValue(forKey: card.id); notice = "تمت إضافة ختم واحد للبطاقة"
+        } catch { self.error = error.localizedDescription }
     }
     func logout() async {
         do { _ = try await call("admin/logout", payload: [:]) }
@@ -138,6 +173,7 @@ struct AdminRoot: View {
             if model.loggedIn {
                 TabView {
                     OrdersScreen(model: model).tabItem { Label("الطلبات", systemImage: "tray.full") }
+                    LoyaltyScreen(model: model).tabItem { Label("بطاقات الولاء", systemImage: "qrcode.viewfinder") }
                     ProductsScreen(model: model).tabItem { Label("المشروبات", systemImage: "cup.and.saucer") }
                     SettingsScreen(model: model).tabItem { Label("الإدارة", systemImage: "slider.horizontal.3") }
                 }
@@ -164,7 +200,7 @@ struct LoginScreen: View {
                     }.padding(.vertical, 20)
                 }
                 Section("دخول المسؤول") {
-                    SecureField("كلمة مرور الإدارة", text: $password).textContentType(.password)
+                    SecureField("رمز دخول الإدارة", text: $password).textContentType(.password).keyboardType(.numberPad)
                     Button { Task { await model.login(password: password); password = "" } } label: {
                         HStack { Text("تسجيل الدخول"); Spacer(); if model.busy { ProgressView() } else { Image(systemName: "arrow.left") } }
                     }.disabled(model.busy || password.isEmpty)
@@ -228,6 +264,9 @@ struct OrdersScreen: View {
 struct OrderCard: View {
     let order: CoffeeOrder
     @ObservedObject var model: AdminModel
+    @State private var showMap = false
+    @State private var rejecting = false
+    @State private var reason = ""
     private var time: String {
         let f = DateFormatter(); f.locale = Locale(identifier: "ar_BH"); f.timeZone = TimeZone(identifier: "Asia/Bahrain"); f.dateStyle = .short; f.timeStyle = .short
         return f.string(from: Date(timeIntervalSince1970: order.created_at))
@@ -242,12 +281,19 @@ struct OrderCard: View {
             Text(order.id).font(.caption2.monospaced()).textSelection(.enabled).foregroundStyle(.secondary)
             Divider()
             ForEach(order.items) { item in HStack { Text(item.name); Spacer(); Text("× \(item.quantity)").foregroundStyle(gold) } }
+            if let options = order.customization, !options.isEmpty { Text(options.values.sorted().joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
             if !order.notes.isEmpty { Text("ملاحظات: " + order.notes).font(.subheadline).foregroundStyle(.secondary) }
-            HStack { Text("استلام من المقهى"); Spacer(); Text(String(format: "%.3f د.ب.", Double(order.total) / 1000)).foregroundStyle(gold) }.font(.caption)
+            HStack { Text(order.fulfillment == "delivery" ? "توصيل للبيت — مجانًا" : "استلام من المقهى"); Spacer(); Text(String(format: "%.3f د.ب.", Double(order.total) / 1000)).foregroundStyle(gold) }.font(.caption)
+            if order.fulfillment == "delivery" {
+                if let address = order.address, !address.isEmpty { Text(address).font(.caption).foregroundStyle(.secondary) }
+                if order.location_lat != nil && order.location_lng != nil { Button("عرض موقع البيت على الخريطة") { showMap = true } }
+            }
+            if order.status == "preparing", let eta = order.estimated_ready_at { Text("الجاهزية المتوقعة: " + Date(timeIntervalSince1970: eta).formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(gold) }
+            if order.status == "cancelled", let rejection = order.rejection_reason { Text("سبب الرفض: " + rejection).font(.caption).foregroundStyle(.red) }
             if order.status == "new" {
                 HStack {
-                    Button("قبول الطلب") { update("preparing") }.buttonStyle(.borderedProminent)
-                    Button("رفض", role: .destructive) { update("cancelled") }.buttonStyle(.bordered)
+                    Menu("قبول الطلب") { ForEach([5,10,15,20,30], id: \.self) { minutes in Button("تجهيز خلال \(minutes) دقيقة") { Task { _ = await model.action("status", payload: ["id":order.id,"status":"preparing","eta_minutes":minutes]) } } } }.buttonStyle(.borderedProminent)
+                    Button("رفض", role: .destructive) { rejecting = true }.buttonStyle(.bordered)
                 }
             }
             Menu("تغيير حالة الطلب") {
@@ -256,8 +302,14 @@ struct OrderCard: View {
             Text("البريد: \(emailLabel) · المحاولات: \(order.email_attempts)").font(.caption2).foregroundStyle(.secondary)
             if order.email_status != "sent" { Button("إعادة محاولة إشعار البريد") { Task { _ = await model.action("retry", payload: ["id":order.id]) } }.font(.caption) }
         }.padding(18).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 16)).disabled(model.busy)
+        .alert("سبب رفض الطلب", isPresented: $rejecting) {
+            TextField("اكتب السبب للزبون", text: $reason)
+            Button("تأكيد الرفض", role: .destructive) { Task { _ = await model.action("status", payload: ["id":order.id,"status":"cancelled","reason":reason.isEmpty ? "نعتذر، تعذر تجهيز الطلب حاليًا" : reason]); reason = "" } }
+            Button("رجوع", role: .cancel) { }
+        }
+        .sheet(isPresented: $showMap) { if let lat = order.location_lat, let lng = order.location_lng { CustomerMap(latitude: lat, longitude: lng) } }
     }
-    private func update(_ status: String) { Task { _ = await model.action("status", payload: ["id":order.id, "status":status]) } }
+    private func update(_ status: String) { if status == "cancelled" { rejecting = true; return }; Task { _ = await model.action("status", payload: ["id":order.id, "status":status]) } }
 }
 
 struct ProductsScreen: View {
@@ -278,7 +330,7 @@ struct ProductsScreen: View {
                         }
                     }
                 }
-                Text("السعر الأساسي لكل مشروب ٢٫٠٠٠ د.ب.، ويُطبق عرض اليوم تلقائيًا.").font(.caption).foregroundStyle(.secondary)
+                Text("جميع طلبات المشروبات مجانية. الطلب العادي مشروب واحد، ومكافأة الولاء مشروبان.").font(.caption).foregroundStyle(.secondary)
             }
             .navigationTitle("المشروبات")
             .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
@@ -322,6 +374,7 @@ struct ProductEditor: View {
 }
 
 struct SettingsScreen: View {
+    @AppStorage("orderSound") private var sound = true
     @ObservedObject var model: AdminModel
     @State private var accepting = true
     @State private var hour = 15
@@ -335,6 +388,7 @@ struct SettingsScreen: View {
                 }
                 if !model.error.isEmpty { Text(model.error).foregroundStyle(.red) }
                 Section("التنبيهات") {
+                    Toggle("تنبيه صوتي عند وصول طلب جديد", isOn: $sound)
                     Text("تصل الطلبات أثناء فتح التطبيق بتحديث تلقائي كل ٣٠ ثانية. اسحب صفحة الطلبات للتحديث فورًا. الإشعارات والتطبيق مغلق غير مفعّلة بعد.").font(.caption)
                     Text("حالة البريد تعني قبول مزوّد الإرسال، وليست تأكيد وصول الرسالة إلى صندوق الوارد.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -343,6 +397,76 @@ struct SettingsScreen: View {
             }
             .navigationTitle("إدارة المقهى")
             .onAppear { accepting = model.data?.settings.accepting == 1; hour = model.data?.settings.opening_hour ?? 15 }
+        }
+    }
+}
+
+struct CustomerMap: View {
+    let latitude: Double
+    let longitude: Double
+    @Environment(\.dismiss) private var dismiss
+    private var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
+    var body: some View {
+        NavigationStack {
+            Map(initialPosition: .region(MKCoordinateRegion(center: coordinate, span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)))) { Marker("موقع بيت الزبون", coordinate: coordinate) }
+                .safeAreaInset(edge: .bottom) { Button("فتح الاتجاهات في الخرائط") { let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate)); item.name = "موقع بيت الزبون"; item.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey:MKLaunchOptionsDirectionsModeDriving]) }.buttonStyle(.borderedProminent).padding() }
+                .navigationTitle("موقع التوصيل").navigationBarTitleDisplayMode(.inline)
+                .toolbar { Button("إغلاق") { dismiss() } }
+        }
+    }
+}
+
+struct LoyaltyScreen: View {
+    @ObservedObject var model: AdminModel
+    @State private var scanning = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("بطاقة الزبون") {
+                    TextField("رقم البطاقة", text: $model.cardNumber).keyboardType(.numberPad)
+                    Button("سكان وإضافة ختم") { scanning = true }
+                    Button("عرض البطاقة") { Task { await model.findCard() } }.disabled(model.busy || model.cardNumber.isEmpty)
+                }
+                if let card = model.loyalty {
+                    Section(card.name) {
+                        Text("رقم البطاقة: " + card.card_number)
+                        HStack { ForEach(0..<5) { index in Image(systemName: index < card.stamps ? "cup.and.saucer.fill" : "cup.and.saucer").font(.title2).foregroundStyle(index < card.stamps ? gold : .gray) } }
+                        Text("متبقي \(card.remaining) ختمات على مشروبين هدية")
+                        Text("رصيد مشروبات المكافأة: \(card.reward_drinks)").foregroundStyle(gold)
+                        Text("إجمالي الختمات: \(card.total_stamps)").font(.caption)
+                        Button("إضافة ختم واحد") { Task { await model.stampCard() } }.disabled(model.busy)
+                    }
+                }
+                if !model.error.isEmpty { Text(model.error).foregroundStyle(.red) }
+                Section { Text("كل خمس ختمات تمنح الزبون مشروبين من اختياره. الختم يضاف من الإدارة فقط، ولا يستطيع الزبون إضافة ختم لنفسه.").font(.caption).foregroundStyle(.secondary) }
+            }
+            .navigationTitle("بطاقات الولاء")
+            .sheet(isPresented: $scanning) {
+                if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+                    CardScanner { value in scanning = false; Task { await model.scanAndStamp(value) } }.ignoresSafeArea()
+                } else { VStack(spacing: 20) { Text("يمكنك كتابة رقم البطاقة يدويًا على هذا الجهاز."); Button("رجوع") { scanning = false } }.padding() }
+            }
+        }
+    }
+}
+struct CardScanner: UIViewControllerRepresentable {
+    let onCode: (String) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode) }
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let view = DataScannerViewController(recognizedDataTypes: [.barcode()], qualityLevel: .balanced, recognizesMultipleItems: false, isHighlightingEnabled: true)
+        view.delegate = context.coordinator
+        DispatchQueue.main.async { try? view.startScanning() }
+        return view
+    }
+    func updateUIViewController(_ controller: DataScannerViewController, context: Context) { }
+    static func dismantleUIViewController(_ controller: DataScannerViewController, coordinator: Coordinator) { controller.stopScanning() }
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        let onCode: (String) -> Void
+        private var handled = false
+        init(onCode: @escaping (String) -> Void) { self.onCode = onCode }
+        func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
+            guard !handled else { return }
+            for item in addedItems { if case .barcode(let code) = item, let value = code.payloadStringValue, value.hasPrefix("MAZAJ:") { handled = true; dataScanner.stopScanning(); onCode(value); return } }
         }
     }
 }
