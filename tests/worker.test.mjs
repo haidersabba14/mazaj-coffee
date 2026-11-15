@@ -50,8 +50,8 @@ test('مشروب واحد للطلب العادي والتحقق من التوص
  await db.prepare('UPDATE settings SET accepting=1,opening_hour=0,all_free=1').run();
  assert.equal((await request('orders',{...order(),items:[{id:'black',quantity:2}]})).status,400);
  assert.equal((await request('orders',{...order(),fulfillment:'delivery'})).status,400);
- const b={...order(),fulfillment:'delivery',location:{lat:26.22,lng:50.58},address:'طريق الاختبار',customization:{milk:'oat',sugar:'none',size:'large'}};
- const r=await request('orders',b);assert.equal(r.status,201);const saved=await db.prepare('SELECT * FROM orders WHERE id=?').bind(b.id).first();assert.equal(saved.fulfillment,'delivery');assert.equal(saved.location_lat,26.22);assert.equal(JSON.parse(saved.customization).milk,'oat');
+ const b={...order(),fulfillment:'delivery',location:{lat:26.22,lng:50.58},address:'طريق الاختبار',customization:{milk:'whole',sugar:'none',size:'large'}};
+ const r=await request('orders',b);assert.equal(r.status,201);const saved=await db.prepare('SELECT * FROM orders WHERE id=?').bind(b.id).first();assert.equal(saved.fulfillment,'delivery');assert.equal(saved.location_lat,26.22);assert.equal(JSON.parse(saved.customization).milk,'whole');
  const tracked=await (await request('track',{id:b.id,token:b.token})).json();assert.equal(tracked.location_lat,undefined);assert.equal(tracked.address,undefined);
  const other=await request('orders',order());assert.equal(other.status,201);
 });
@@ -68,3 +68,5 @@ test('خمس ختمات من الإدارة تمنح مشروبين، والاس
  const depleted=await (await request('card',{id:b.id,token:b.token})).json();assert.equal(depleted.reward_drinks,0);
  assert.equal((await request('orders',{...o,id:crypto.randomUUID(),token:token()})).status,409);
 });
+
+test('الحليب كامل الدسم فقط',async()=>{const r=await request('orders',{...order(),customization:{milk:'oat'}});assert.equal(r.status,400);});
