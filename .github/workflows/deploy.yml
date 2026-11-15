@@ -25,4 +25,4 @@ jobs:
           test -n "$TURNSTILE_SITE_KEY"
           test -n "$CLOUDFLARE_API_TOKEN"
       - run: npx cf d1 migrations apply "$D1_DATABASE_ID"
-      - run: npm run deploy
+      - run: npm run deploy:pages
