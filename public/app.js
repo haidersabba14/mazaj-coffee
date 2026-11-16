@@ -55,6 +55,7 @@ function orderStageCopy(o){
  return {kind:'accepted',title:'تم قبول الطلب!',message:'المقهى قبل طلبك وبدأ التجهيز. '+orderUpdate(o),icon:'✓'};
 }
 function renderOrderStage(o){
+ const hint=$('#receipt-credential-hint');if(hint)hint.textContent=o.token?'احتفظ برقم الطلب ورمز التحقق؛ ستحتاجهما لمتابعة الطلب.':'هذا الطلب مرتبط بحسابك؛ يمكنك متابعته بعد تسجيل الدخول دون إدخال رمز منفصل.';
  window.dispatchEvent(new CustomEvent('royal-order-update',{detail:{...o,token:receipt?.token}}));
  const copy=orderStageCopy(o),stage=$('#order-stage');stage.className='order-stage '+copy.kind;stage.setAttribute('aria-busy',String(copy.kind==='waiting'));$('#order-stage-title').textContent=copy.title;$('#order-stage-message').textContent=copy.message;$('#order-stage-eyebrow').textContent=copy.kind==='waiting'?'تم حفظ طلبك':'تحديث من المقهى';$('#order-stage-icon').innerHTML=copy.icon==='waiting'?'<span class="waiting-spinner"></span>':copy.icon;
  const status=$('#receipt-state');if(status)status.textContent='الحالة: '+names[o.status];const update=$('#receipt-update');if(update)update.textContent=orderUpdate(o);$('#current-order').hidden=false;$('#current-order').textContent=copy.kind==='waiting'?'طلبك بانتظار القبول · عرض':copy.title+' · عرض';
