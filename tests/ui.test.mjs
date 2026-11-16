@@ -44,3 +44,21 @@ test('واجهة الاستدعاء تعرض رقم CR وتؤكد التنبيه
  }finally{w.close();}
 });
 test('لا توجد خيارات مفاجأة أو حجم كبير في المتجر',()=>{const d=new JSDOM(html).window.document;assert.equal(d.querySelector('#surprise'),null);assert.deepEqual([...d.querySelectorAll('[name=size] option')].map(o=>o.value),['medium','small']);});
+
+test('معاينة المشروب تحفظ الحجم المختار للطلب والمفضلة قابلة للإلغاء',async()=>{
+ const dom=await setup(),w=dom.window,d=w.document;try{
+  d.querySelector('[data-preview="cappuccino"]').click();assert.equal(d.querySelector('#product-dialog').open,true);assert.equal(d.querySelector('#preview-name').textContent,'كابتشينو حار');
+  d.querySelector('[name="preview-size"][value="small"]').checked=true;d.querySelector('#preview-buy').click();await new Promise(r=>setTimeout(r,20));assert.equal(d.querySelector('#product-dialog').open,false);assert.equal(d.querySelector('#cart-dialog').open,true);assert.equal(d.querySelector('#checkout [name=size]').value,'small');
+  d.querySelector('[data-close="cart-dialog"]').click();d.querySelector('[data-favorite="black"]').click();assert.equal(d.querySelector('[data-favorite="black"]').getAttribute('aria-pressed'),'true');d.querySelector('#favorites-only').click();assert.equal(d.querySelectorAll('.product').length,1);d.querySelector('[data-favorite="black"]').click();assert.equal(d.querySelectorAll('.product').length,0);d.querySelector('#reset-menu').click();assert.equal(d.querySelectorAll('.product').length,7);
+  d.querySelector('#drink-search').value='لاتيه غير موجود';d.querySelector('#drink-search').dispatchEvent(new w.Event('input'));assert.equal(d.querySelector('#clear-search').hidden,false);d.querySelector('#clear-search').click();assert.equal(d.querySelectorAll('.product').length,7);
+ }finally{w.close();}
+});
+test('التقييم لا يعرض نجاحًا قبل حفظه ويستخدم اعتماد الطلب الحالي',async()=>{
+ const dom=await setup(true,true),w=dom.window,d=w.document;try{
+  const original=w.fetch;let succeeds=false,submitted;
+  w.fetch=async(path,options)=>{if(path==='/api/order/rating'){submitted=JSON.parse(options.body);return {ok:succeeds,json:async()=>succeeds?{ok:true,rating:{product_id:'cappuccino',stars:5}}:{error:'تعذر حفظ التقييم'}};}const r=await original(path,options);if(path==='/api/track'){const b=await r.json();return {ok:true,json:async()=>({...b,items:[{id:'cappuccino',name:'كابتشينو حار',quantity:1}]})};}return r;};
+  await placeOrder(dom);assert.equal(d.querySelector('#order-ratings').hidden,true);w.__orderStatus='delivered';await vm.runInContext('pollOrderStatus(true)',dom.getInternalVMContext());assert.equal(d.querySelector('#order-ratings').hidden,false);
+  d.querySelector('[data-stars="5"]').click();await new Promise(r=>setTimeout(r,20));assert.ok(d.querySelector('#rating-result').textContent.includes('تعذر'));assert.match(submitted.token,/^[a-f0-9]{64}$/);assert.equal(submitted.stars,5);
+  succeeds=true;d.querySelector('[data-stars="5"]').click();await new Promise(r=>setTimeout(r,30));assert.ok(d.querySelector('#rating-result').textContent.includes('تم حفظ'));assert.equal(d.querySelector('[data-stars="5"]').getAttribute('aria-pressed'),'true');assert.equal(JSON.parse(w.localStorage.getItem('mazaj-receipt')).ratings[0].stars,5);
+ }finally{w.close();}
+});

@@ -1,4 +1,4 @@
-const CACHE='coffee-royal-v3';
+const CACHE='coffee-royal-v4-copper';
 self.addEventListener('install',event=>event.waitUntil(Promise.all([caches.open(CACHE).then(cache=>cache.addAll(['/images/fallback.svg','/icon.svg','/offline.html'])),self.skipWaiting()])));
 self.addEventListener('activate',event=>event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))),self.clients.claim()])));
 self.addEventListener('fetch',event=>{

@@ -231,3 +231,21 @@ test('حذف العميل يحذف الجلسات ويبقي الطلب الجا
  assert.equal(await db.prepare('SELECT id FROM customers WHERE id=?').bind(u.user.id).first(),null);assert.equal((await db.prepare('SELECT COUNT(*) n FROM customer_sessions WHERE customer_id=?').bind(u.user.id).first()).n,0);assert.equal((await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(o.id).first()).customer_id,null);
  assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,401);assert.equal((await request('track',{id:o.id,token:o.token})).status,200);
 });
+
+test('تقييم حقيقي بعد التسليم فقط؛ الملكية والمشروب وعدد النجوم محمية',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);
+ const rating={id:o.id,product_id:'cappuccino',stars:5};
+ assert.equal((await customerRequest('order/rating',rating,a.cookie)).status,409);
+ await db.prepare("UPDATE orders SET status='delivered' WHERE id=?").bind(o.id).run();
+ assert.equal((await customerRequest('order/rating',rating,b.cookie)).status,404);
+ assert.equal((await request('order/rating',rating)).status,404);
+ assert.equal((await request('order/rating',{...rating,token:token()})).status,404);
+ assert.equal((await customerRequest('order/rating',{...rating,product_id:'black'},a.cookie)).status,400);
+ for(const stars of [0,6,2.5,'5'])assert.equal((await customerRequest('order/rating',{...rating,stars},a.cookie)).status,400);
+ const saved=await customerRequest('order/rating',rating,a.cookie);assert.equal(saved.status,200);assert.deepEqual((await saved.json()).rating,{product_id:'cappuccino',stars:5});
+ assert.equal((await request('order/rating',{...rating,token:o.token,stars:4})).status,200);
+ const row=await db.prepare('SELECT COUNT(*) n,MAX(stars) stars FROM drink_ratings WHERE order_id=?').bind(o.id).first();assert.equal(row.n,1);assert.equal(row.stars,4);
+ const tracked=await(await customerRequest('track',{id:o.id},a.cookie)).json();assert.deepEqual(tracked.ratings,[{product_id:'cappuccino',stars:4}]);
+ const publicProducts=await(await request('catalog')).json();const drink=publicProducts.products.find(p=>p.id==='cappuccino');assert.ok(drink.rating_count>=1);assert.ok(drink.rating_average>=1);assert.equal('customer_id' in drink,false);assert.equal('order_id' in drink,false);
+ await db.prepare('DELETE FROM orders WHERE id=?').bind(o.id).run();assert.equal((await db.prepare('SELECT COUNT(*) n FROM drink_ratings WHERE order_id=?').bind(o.id).first()).n,0);
+});
