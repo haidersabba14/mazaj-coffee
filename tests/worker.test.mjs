@@ -117,7 +117,7 @@ test('المخزون ذري تحت التزامن ويرجع مرة واحدة �
 test('صلاحيات الموظفين والجلسات الملغاة والتخصيص الخاص بكل مستخدم',async()=>{
  const ownerCookie=await loginOwner();const id=crypto.randomUUID(),staffPassword='staff-password-long-123';let r=await request('admin/staff',{id,username:'barista',name:'موظف الاختبار',password:staffPassword,role:'staff',active:true},true);assert.equal(r.status,200);
  r=await request('login',{username:'barista',password:staffPassword});assert.equal(r.status,200);const staffCookie=r.headers.get('set-cookie').split(';')[0];cookie=staffCookie;
- for(const path of ['staff','audit','diagnostics','backup','export'])assert.equal((await request('admin/'+path,undefined,true)).status,403);
+ for(const path of ['staff','audit','diagnostics','backup','export','ingredients','images','archives'])assert.equal((await request('admin/'+path,undefined,true)).status,403);
  assert.equal((await request('admin/product',{id:'black',name:'غير مسموح'},true)).status,403);
  assert.equal((await request('admin/preferences',{settings:{theme:'light',tone:'bell',volume:.3,sound:false,accent:'#123456'}},true)).status,200);
  assert.equal((await(await request('admin/preferences',undefined,true)).json()).settings.theme,'light');
@@ -132,4 +132,41 @@ test('أرشفة الطلبات المنتهية وسجل إداري ونسخة 
  await loginOwner();const o=await db.prepare("SELECT id FROM orders WHERE status='cancelled' LIMIT 1").first();assert.equal((await request('admin/archive',{id:o.id},true)).status,200);const list=await(await request('admin/data',undefined,true)).json();assert.ok(!list.orders.some(r=>r.id===o.id));const a=await(await request('admin/audit',undefined,true)).json();assert.ok(a.events.some(a=>a.action==='order_archived'));
  const csv=await request('admin/export',undefined,true);assert.match(csv.headers.get('content-type'),/text\/csv/);assert.ok((await csv.text()).includes('order_number'));
  const backup=await(await request('admin/backup',undefined,true)).json();assert.equal(backup.version,3);assert.ok(Array.isArray(backup.tables.orders));assert.equal(backup.tables.sessions,undefined);
+});
+
+test('اسم مالك مخصص مطلوب ولا يقبل الاسم القديم أو كلمة المرور وحدها',async()=>{
+ const salt='custom-owner',f=new Miniflare({modules:true,script:bundled,compatibilityDate:'2026-08-06',d1Databases:['DB'],bindings:{RATE_SALT:'salt',ADMIN_USERNAME:'Royal_Owner',ADMIN_PASSWORD_HASH:salt+':'+pbkdf2Sync(password,salt,100000,32,'sha256').toString('hex')},serviceBindings:{ASSETS:()=>new Response('asset')}});
+ try{await migrate(await f.getD1Database('DB'));const send=b=>f.dispatchFetch(origin+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(b)});assert.equal((await send({username:'owner',password})).status,401);assert.equal((await send({password})).status,401);assert.equal((await send({username:'ROYAL_OWNER',password})).status,200);}finally{await f.dispose();}
+});
+
+test('المكونات تُخصم ذريًا وتعود بكميتها الأصلية بعد تغيير الوصفة',async()=>{
+ await loginOwner();await db.prepare('UPDATE settings SET accepting=1,opening_hour=0,capacity=200').run();const ingredientId=crypto.randomUUID();
+ assert.equal((await request('admin/ingredients',{id:ingredientId,name:'بن اختبار',unit:'g',stock_milli:20000,reorder_level_milli:5000,active:true},true)).status,200);
+ assert.equal((await request('admin/recipe',{id:'black',ingredients:[{id:ingredientId,quantity_milli:20000}]},true)).status,200);
+ const a={...order(),items:[{id:'black',quantity:1}]},b={...order(),items:[{id:'black',quantity:1}]};const results=await Promise.all([request('orders',a),request('orders',b)]);assert.equal(results.filter(r=>r.status===201).length,1);assert.equal((await db.prepare('SELECT stock_milli FROM ingredients WHERE id=?').bind(ingredientId).first()).stock_milli,0);
+ const catalog=await(await request('catalog')).json();assert.ok(!catalog.products.some(p=>p.id==='black'));
+ await request('admin/recipe',{id:'black',ingredients:[{id:ingredientId,quantity_milli:1000}]},true);const winner=results[0].status===201?a:b;
+ assert.equal((await request('admin/status',{id:winner.id,status:'cancelled',reason:'اختبار الوصفة'},true)).status,200);await request('admin/status',{id:winner.id,status:'cancelled',reason:'اختبار الوصفة'},true);assert.equal((await db.prepare('SELECT stock_milli FROM ingredients WHERE id=?').bind(ingredientId).first()).stock_milli,20000);
+ assert.equal((await request('admin/ingredients',{id:ingredientId,name:'بن اختبار',unit:'ml',stock_milli:20000,reorder_level_milli:5000,active:true},true)).status,409);
+ await request('admin/recipe',{id:'black',ingredients:[]},true);
+ assert.equal((await request('admin/recipe',{id:'black',ingredients:[{id:ingredientId,quantity_milli:-1}]},true)).status,400);
+});
+test('رفع صور حقيقية وحمايتها ورفض SVG والملفات الكبيرة وحذف غير المستخدم فقط',async()=>{
+ await loginOwner();const bytes=await readFile('public/images/icon-192.png');const upload=async(data,type)=>mf.dispatchFetch(origin+'/api/admin/images',{method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':type},body:data});
+ assert.equal((await upload('<svg/>','image/svg+xml')).status,415);assert.equal((await upload(new Uint8Array(205000),'image/png')).status,413);assert.equal((await upload('bad image','image/png')).status,400);
+ const result=await upload(bytes,'image/png');assert.equal(result.status,201);const image=await result.json();const loaded=await mf.dispatchFetch(origin+image.url);assert.equal(loaded.status,200);assert.equal(loaded.headers.get('content-type'),'image/png');const imageData=Buffer.from(await loaded.arrayBuffer());assert.equal(imageData.length,bytes.length);assert.deepEqual(imageData,bytes);
+ await request('admin/product',{id:'black',name:'بلاك كوفي',description:'مشروب اختبار',image:image.url,category:'hot',available:true},true);assert.equal((await request('admin/image-delete',{id:image.id},true)).status,409);
+ await request('admin/product',{id:'black',name:'بلاك كوفي',description:'مشروب اختبار',image:'/images/black.webp',category:'hot',available:true},true);assert.equal((await request('admin/image-delete',{id:image.id},true)).status,200);assert.equal((await mf.dispatchFetch(origin+image.url)).status,404);
+});
+test('تقارير مؤرخة وفرع مستقل وتصدير Excel حقيقي دون صيغ قابلة للتنفيذ',async()=>{
+ await loginOwner();const {unzipSync,strFromU8}=await import('fflate');const {spreadsheet}=await import('../src/reporting.js');const x=await request('admin/export?format=xlsx',undefined,true);assert.equal(x.status,200);assert.match(x.headers.get('content-type'),/spreadsheetml/);const zipped=unzipSync(new Uint8Array(await x.arrayBuffer()));assert.ok(zipped['xl/workbook.xml']);assert.ok(strFromU8(zipped['xl/worksheets/sheet1.xml']).includes('order_number'));
+ const safe=unzipSync(spreadsheet(['name'],[['=HYPERLINK("https://example.com")'],['<script>']]));const sheet=strFromU8(safe['xl/worksheets/sheet1.xml']);assert.ok(sheet.includes('inlineStr'));assert.ok(!sheet.includes('<f>'));assert.ok(sheet.includes('&lt;script&gt;'));
+ const r=await(await request('admin/report?from=2000-01-01&to=2000-01-02',undefined,true)).json();assert.equal(r.summary.orders,0);assert.equal((await request('admin/report?from=2026-02-30',undefined,true)).status,400);assert.equal((await request('admin/export?from=2026-11-20&to=2026-11-01',undefined,true)).status,400);
+ const id=crypto.randomUUID();assert.equal((await request('admin/branches',{id,name:'فرع اختبار',opening_hour:0,closing_hour:24,active:true},true)).status,200);const o={...order(),branch_id:id};assert.equal((await request('orders',o)).status,201);const scoped=await(await request('admin/report?branch='+id,undefined,true)).json();assert.equal(scoped.summary.orders,1);assert.equal(scoped.branches[0].branch_id,id);
+ await request('admin/branches',{id,name:'فرع اختبار',opening_hour:0,closing_hour:24,active:false},true);assert.equal((await request('orders',{...order(),branch_id:id})).status,409);
+});
+test('التخصيص يرفض إدخال CSS وترتيبًا مكررًا ويحفظ الخطوط والاختصارات',async()=>{
+ await loginOwner();assert.equal((await request('admin/preferences',{settings:{background:'url(javascript:bad)'}},true)).status,400);assert.equal((await request('admin/preferences',{settings:{metrics:['daily','daily']}},true)).status,400);assert.equal((await request('admin/preferences',{settings:{sections:['unknown']}},true)).status,400);
+ const settings={theme:'system',accent:'#112233',background:'coffee',font:'rounded',icons:'filled',sections:['products','orders','management'],shortcuts:['ready','accepted'],metrics:['weekly','daily'],sound:false,volume:.25};assert.equal((await request('admin/preferences',{settings},true)).status,200);assert.deepEqual((await(await request('admin/preferences',undefined,true)).json()).settings,settings);
+ const archived=await(await request('admin/archives',undefined,true)).json();if(archived.orders.length){const id=archived.orders[0].id;assert.equal((await request('admin/archive',{id,archived:false},true)).status,200);assert.ok(!(await(await request('admin/archives',undefined,true)).json()).orders.some(o=>o.id===id));}
 });

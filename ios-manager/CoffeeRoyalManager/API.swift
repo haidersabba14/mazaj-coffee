@@ -30,6 +30,9 @@ struct ErrorReply: Decodable { let error: String }
     private var player = AVAudioPlayerNode()
     private var soundReady = false
     private let session = URLSession(configuration:.ephemeral)
+    var accent:Color { Color(royalHex:preferences.accent) }
+    var background:Color { if preferences.theme=="system" {return Color(uiColor:.systemGroupedBackground)};return preferences.theme == "light" ? Color(royalHex:"#F6F3EB") : Color(royalHex:preferences.background == "coffee" ? "#211A17":preferences.background == "charcoal" ? "#16191D":"#101F1B") }
+    var fontDesign:Font.Design { preferences.font == "serif" ? .serif:preferences.font == "rounded" ? .rounded:.default }
     var owner: Bool { user?.role == "owner" }
     var savedSession: Bool { SessionVault.read() != nil }
 
@@ -46,6 +49,14 @@ struct ErrorReply: Decodable { let error: String }
         guard (200...299).contains(http.statusCode) else { throw APIError(message:(try? JSONDecoder().decode(ErrorReply.self,from:data).error) ?? "تعذر إتمام العملية") }
         if let value=http.value(forHTTPHeaderField:"Set-Cookie"),let first=value.components(separatedBy:";").first, first.hasPrefix("session=") { cookie=first;SessionVault.save(first) }
         return data
+    }
+    func uploadImage(_ data:Data) async throws -> String {
+        guard data.count<=200*1024 else {throw APIError(message:"حجم الصورة أكبر من الحد")}
+        var req=URLRequest(url:royalBase.appendingPathComponent("api/admin/images"));req.httpMethod="POST";req.httpBody=data;req.setValue("image/jpeg",forHTTPHeaderField:"Content-Type");req.setValue(royalBase.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/")),forHTTPHeaderField:"Origin");if let cookie{req.setValue(cookie,forHTTPHeaderField:"Cookie")}
+        let(body,response)=try await session.data(for:req);guard let http=response as? HTTPURLResponse,(200...299).contains(http.statusCode) else{throw APIError(message:(try? JSONDecoder().decode(ErrorReply.self,from:body).error) ?? "تعذر رفع الصورة")};struct Reply:Decodable{let url:String};return try JSONDecoder().decode(Reply.self,from:body).url
+    }
+    func downloadReport(_ query:String) async throws -> URL {
+        let data=try await call("admin/export?format=xlsx&"+query);let file=FileManager.default.temporaryDirectory.appendingPathComponent("CoffeeRoyal-Report.xlsx");try data.write(to:file,options:.atomic);return file
     }
     func login(username: String,password: String) async {
         guard !busy else { return };busy=true;error="";defer{busy=false}
@@ -103,7 +114,7 @@ struct ErrorReply: Decodable { let error: String }
             try AVAudioSession.sharedInstance().setCategory(.ambient,mode:.default);try AVAudioSession.sharedInstance().setActive(true)
             if !soundReady { audio.attach(player);audio.connect(player,to:audio.mainMixerNode,format:AVAudioFormat(standardFormatWithSampleRate:44100,channels:1));soundReady=true }
             if !audio.isRunning { try audio.start() }
-            let notes:[Double]=urgent ? [880,1174,880,1174] : preferences.tone=="bell" ? [660,880] : [523,659,784]
+            let notes:[Double]=urgent ? [880,1174,880,1174] : preferences.tone=="bell" ? [660,880] : preferences.tone=="bright" ? [880,1174,1318] : [523,659,784]
             let frames=AVAudioFrameCount(Double(notes.count)*0.25*44100)
             guard let format=AVAudioFormat(standardFormatWithSampleRate:44100,channels:1),let buffer=AVAudioPCMBuffer(pcmFormat:format,frameCapacity:frames),let samples=buffer.floatChannelData?[0] else{return}
             buffer.frameLength=frames

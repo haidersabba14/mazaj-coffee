@@ -3,8 +3,8 @@ struct ManagementView:View{
     @EnvironmentObject var store:RoyalStore
     var body:some View{NavigationStack{List{
         Section("الحساب"){Text(store.user?.name ?? "");Text(store.owner ? "مالك":"موظف").foregroundStyle(.secondary);Button("تفعيل إشعارات الخلفية"){Task{await store.askNotifications()}};Text(store.deviceStatus).font(.caption).foregroundStyle(.secondary)}
-        Section("المظهر والصوت"){Picker("المظهر",selection:$store.preferences.theme){Text("ليلي").tag("dark");Text("نهاري").tag("light")};Picker("البطاقات",selection:$store.preferences.cards){Text("عادي").tag("normal");Text("مدمج").tag("compact");Text("دائري").tag("rounded")};Picker("النغمة",selection:$store.preferences.tone){Text("ملكي").tag("royal");Text("جرس").tag("bell")};Toggle("الصوت داخل التطبيق",isOn:$store.preferences.sound);Toggle("الاهتزاز",isOn:$store.preferences.vibration);Slider(value:$store.preferences.volume,in:0...1){Text("مستوى صوت التطبيق")};Button("تجربة الصوت"){store.playSound()};Button("حفظ ومزامنة التخصيص"){Task{await store.savePreferences()}};Text("إعدادات الصوت هنا تخص التطبيق المفتوح. تنبيهات النظام تخضع للصامت والتركيز وإعدادات iOS.").font(.caption).foregroundStyle(.secondary)}
-        Section("متابعة العمليات"){NavigationLink("مركز الإشعارات"){NotificationsView()};NavigationLink("الأجهزة والجلسات"){SessionsView()};if store.owner{NavigationLink("التشغيل وساعات العمل"){OperationsSettingsView()};NavigationLink("الفريق والصلاحيات"){TeamView()};NavigationLink("سجل العمليات"){AuditView()};NavigationLink("الإحصائيات والتقارير"){ReportsView()}}}
+        Section("المظهر والصوت"){NavigationLink("محرر الألوان والخطوط والترتيب"){AppearanceView()};Button("تجربة الصوت"){store.playSound()}}
+        Section("متابعة العمليات"){NavigationLink("مركز الإشعارات"){NotificationsView()};NavigationLink("الأجهزة والجلسات"){SessionsView()};if store.owner{NavigationLink("المكونات والوصفات"){IngredientsView()};NavigationLink("الفروع وساعاتها"){BranchesView()};NavigationLink("أرشيف الطلبات"){ArchivesView()};NavigationLink("التشغيل وساعات العمل"){OperationsSettingsView()};NavigationLink("الفريق والصلاحيات"){TeamView()};NavigationLink("سجل العمليات"){AuditView()};NavigationLink("الإحصائيات والتقارير"){ReportsView()}}}
         if !store.error.isEmpty{Section{Text(store.error).foregroundStyle(.red)}}
         Section{Text("الإصدار \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.0.0") · بناء \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "3")").font(.caption);Text("اتصال آمن بقاعدة البيانات السحابية. تحديث كل ٥ ثوانٍ أثناء فتح التطبيق.").font(.caption).foregroundStyle(.secondary);Button("قفل الإدارة الآن"){store.lock()};Button("تسجيل الخروج",role:.destructive){Task{await store.logout()}}}
     }.navigationTitle("الإدارة")}}
@@ -68,8 +68,4 @@ struct AuditView:View{
     @EnvironmentObject var store:RoyalStore
     @State private var events:[AuditEvent]=[]
     var body:some View{List(events){a in VStack(alignment:.leading,spacing:7){Text(a.action);Text(a.user_name).font(.caption);Text(Date(timeIntervalSince1970:a.created_at),style:.date).font(.caption2).foregroundStyle(.secondary)}}.navigationTitle("سجل العمليات").task{do{struct Reply:Decodable{let events:[AuditEvent]};events=try JSONDecoder().decode(Reply.self,from:await store.call("admin/audit")).events}catch{store.error=error.localizedDescription}}}
-}
-struct ReportsView:View{
-    @EnvironmentObject var store:RoyalStore
-    var body:some View{List{Section("الطلبات"){LabeledContent("اليوم",value:String(store.data?.stats.daily ?? 0));LabeledContent("آخر ٧ أيام",value:String(store.data?.stats.weekly ?? 0))};Section("الأكثر طلبًا"){ForEach(store.data?.popular ?? [],id:\.name){p in LabeledContent(p.name,value:String(p.quantity))}};Section{Text("تقارير زمن التحضير والانتظار وتصدير CSV متاحة في اللوحة السحابية المحمية.").font(.caption)}}.navigationTitle("الإحصائيات")}
 }

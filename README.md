@@ -3,7 +3,7 @@
 منصة طلبات مجانية على نفس رابط مزاج: https://mazaj-cafe-995.pages.dev
 
 - متجر عربي/إنجليزي بتصميم جديد، ١٢ مشروبًا، صغير/وسط فقط، والشاي والقهوة العربية بسكر عادي.
-- لوحة محمية منفصلة: https://mazaj-cafe-995.pages.dev/manager.html، حساب المالك `owner` وكلمة المرور الحالية.
+- لوحة محمية منفصلة: https://mazaj-cafe-995.pages.dev/manager.html، اسم دخول المالك المهيأ وكلمة مروره الحالية.
 - تطبيق SwiftUI جديد: [ios-manager](ios-manager/README.md)، وWorkflow لبناء IPA غير موقّع وإرفاقه في GitHub Release.
 - [تعليمات النشر والحماية والإشعارات](docs/ROYAL-DEPLOYMENT.md).
 - [سجل الميزات وحدود هدف 2331](docs/FEATURES-2331.md).

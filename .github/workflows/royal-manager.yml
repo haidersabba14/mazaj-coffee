@@ -5,7 +5,7 @@ on:
       version:
         description: Release version
         required: true
-        default: '3.0.0'
+        default: '3.1.0'
       signed:
         description: Signed IPA (requires Apple secrets; default unsigned)
         type: boolean
