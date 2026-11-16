@@ -10,13 +10,13 @@ import {hash,isOpen,bahrainDate,bahrainWeekday,pricing,emailHtml} from '../src/w
 const vapid=generateKeyPairSync('ec',{namedCurve:'prime256v1'}).privateKey.export({format:'jwk'});const vapidPublic=Buffer.concat([Buffer.from([4]),Buffer.from(vapid.x,'base64url'),Buffer.from(vapid.y,'base64url')]).toString('base64url');
 const origin='https://coffee.test';let mf,db,cookie;const token=()=>randomBytes(32).toString('hex'),password='test-admin-password-long';
 const mock=new MockAgent();mock.disableNetConnect();
-const site=mock.get('https://challenges.cloudflare.com');site.intercept({path:'/turnstile/v0/siteverify',method:'POST'}).reply(200,{success:true,hostname:'coffee.test',action:'checkout'}).persist();
+const site=mock.get('https://challenges.cloudflare.com');site.intercept({path:'/turnstile/v0/siteverify',method:'POST'}).reply(200,async options=>{const submitted=await new Response(options.body).text();return {success:true,hostname:'coffee.test',action:submitted.includes('register-valid-token')?'customer-register':'checkout'};}).persist();
 mock.get('https://fcm.googleapis.com').intercept({path:'/fcm/send/royal-test',method:'POST'}).reply(201,'').persist();
 const resend=mock.get('https://api.resend.com');resend.intercept({path:'/emails',method:'POST'}).reply(200,{id:'email-test'}).persist();
 async function request(path,data,auth=false,customOrigin=origin){return mf.dispatchFetch(origin+'/api/'+path,{method:data?'POST':'GET',headers:{...(data?{'Content-Type':'application/json','Origin':customOrigin}:{}),...(auth?{Cookie:cookie}:{})},body:data?JSON.stringify(data):undefined});}
 function order(){return {id:crypto.randomUUID(),token:token(),name:'عميل الاختبار',phone:'+973 33333333',notes:'بدون سكر',items:[{id:'cappuccino',quantity:1}],expectedTotal:0,turnstile:'test-token'};}
 async function migrate(d){for(const file of (await readdir('migrations')).filter(f=>f.endsWith('.sql')).sort()){const sql=await readFile('migrations/'+file,'utf8');let regular='';const flush=async()=>{for(const stmt of regular.split(';').map(s=>s.trim()).filter(Boolean))await d.prepare(stmt).run();regular='';};for(const line of sql.split('\n')){if(line.startsWith('CREATE TRIGGER')){await flush();await d.exec(line);}else regular+=line+'\n';}await flush();}}
-before(async()=>{const salt='test-salt';mf=new Miniflare({modules:true,script:bundled,compatibilityDate:'2026-08-06',d1Databases:['DB'],bindings:{TURNSTILE_SITE_KEY:'test-site',TURNSTILE_SECRET:'test-secret',RATE_SALT:'test-rate-salt',ADMIN_PASSWORD_HASH:salt+':'+pbkdf2Sync(password,salt,100000,32,'sha256').toString('hex'),VAPID_PUBLIC_KEY:vapidPublic,VAPID_PRIVATE_KEY:vapid.d,RESEND_API_KEY:'test',EMAIL_FROM:'coffee@example.com'},serviceBindings:{ASSETS:()=>new Response('asset')},fetchMock:mock});db=await mf.getD1Database('DB');await migrate(db);await db.prepare('UPDATE settings SET opening_hour=0,all_free=1').run();await db.prepare('UPDATE branches SET opening_hour=0').run();});
+before(async()=>{const salt='test-salt';mf=new Miniflare({modules:true,script:bundled,compatibilityDate:'2026-08-06',d1Databases:['DB'],bindings:{CUSTOMER_AUTH_SECRET:'customer-test-pepper-long-and-private',TURNSTILE_SITE_KEY:'test-site',TURNSTILE_SECRET:'test-secret',RATE_SALT:'test-rate-salt',ADMIN_PASSWORD_HASH:salt+':'+pbkdf2Sync(password,salt,100000,32,'sha256').toString('hex'),VAPID_PUBLIC_KEY:vapidPublic,VAPID_PRIVATE_KEY:vapid.d,RESEND_API_KEY:'test',EMAIL_FROM:'coffee@example.com'},serviceBindings:{ASSETS:()=>new Response('asset')},fetchMock:mock});db=await mf.getD1Database('DB');await migrate(db);await db.prepare('UPDATE settings SET opening_hour=0,all_free=1').run();await db.prepare('UPDATE branches SET opening_hour=0').run();});
 beforeEach(async()=>{await db.prepare('DELETE FROM limits').run();});
 after(async()=>{await mf.dispose();await mock.close();});
 test('البحرين: يفتح ٣ عصرًا والعرض ينتهي عند منتصف الليل',()=>{assert.equal(isOpen({accepting:1,opening_hour:15},new Date('2026-11-13T11:59:59Z')),false);assert.equal(isOpen({accepting:1,opening_hour:15},new Date('2026-11-13T12:00:00Z')),true);assert.equal(isOpen({accepting:0,opening_hour:15},new Date('2026-11-13T12:00:00Z')),false);assert.equal(bahrainDate(new Date('2026-11-13T21:00:00Z')),'2026-11-14');});
@@ -173,4 +173,61 @@ test('التخصيص يرفض إدخال CSS وترتيبًا مكررًا وي�
 test('حد مكتبة الصور ذري عند رفعين متزامنين',async()=>{
  await loginOwner();await db.batch(Array.from({length:99},(_,n)=>db.prepare('INSERT INTO product_images VALUES(?,?,?,?,?,?)').bind('quota-'+n,'image/png',new Uint8Array([1]).buffer,1,1,'owner')));
  try{const bytes=await readFile('public/images/icon-192.png'),upload=()=>mf.dispatchFetch(origin+'/api/admin/images',{method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'image/png'},body:bytes});const r=await Promise.all([upload(),upload()]);assert.equal(r.filter(r=>r.status===201).length,1);assert.equal(r.filter(r=>r.status===409).length,1);assert.equal((await db.prepare('SELECT COUNT(*) n FROM product_images').first()).n,100);}finally{await db.prepare('DELETE FROM product_images').run();}
+});
+
+async function customerRequest(path,data,session){return mf.dispatchFetch(origin+'/api/'+path,{method:data?'POST':'GET',headers:{...(data?{Origin:origin,'Content-Type':'application/json'}:{}),...(session?{Cookie:session}:{})},body:data?JSON.stringify(data):undefined});}
+const customerPassword='Customer-secret-pass-123';
+async function newCustomer(extra={}){const username='customer_'+crypto.randomUUID().slice(0,8),r=await customerRequest('customer/register',{username,password:customerPassword,name:'عميل حساب',phone:'33333333',turnstile:'register-valid-token',...extra});assert.equal(r.status,201,await r.clone().text());return {...await r.json(),cookie:r.headers.get('set-cookie').split(';')[0],cookieHeader:r.headers.get('set-cookie')};}
+test('حساب عميل حقيقي محفوظ وكلمات المرور ورمز الاسترداد غير مخزنة بنص صريح',async()=>{
+ const config=await(await customerRequest('customer/config')).json();assert.equal(config.configured,true);assert.equal(config.secret,undefined);
+ const u=await newCustomer();assert.match(u.cookieHeader,/__Host-royal_customer=.*Path=\/; HttpOnly; Secure; SameSite=Strict/);assert.match(u.recovery_code,/^[a-f0-9]{64}$/);
+ const row=await db.prepare('SELECT * FROM customers WHERE id=?').bind(u.user.id).first();assert.ok(row.password_hash.startsWith('v1:'));assert.ok(!row.password_hash.includes(customerPassword));assert.notEqual(row.recovery_hash,u.recovery_code);assert.notEqual(row.recovery_hash,await hash(u.recovery_code));
+ const me=await(await customerRequest('customer/me',undefined,u.cookie)).json();assert.equal(me.user.username,u.user.username);assert.equal(me.user.password_hash,undefined);assert.equal(me.user.recovery_hash,undefined);assert.equal(me.user.auth_version,undefined);
+ assert.equal((await customerRequest('admin/data',undefined,u.cookie)).status,401);await loginOwner();assert.equal((await customerRequest('customer/me',undefined,cookie)).status,401);
+ const duplicate=await customerRequest('customer/register',{username:u.user.username.toUpperCase(),password:customerPassword,turnstile:'register-valid-token'});assert.equal(duplicate.status,409);
+ const session=await db.prepare('SELECT token_hash FROM customer_sessions WHERE customer_id=?').bind(u.user.id).first();assert.equal(session.token_hash,await hash(u.cookie.split('=')[1]));
+});
+test('التحقق الأمني للتسجيل ومصدر الطلب والحدود تمنع حسابات السبام',async()=>{
+ const b={username:'blocked_customer',password:customerPassword,turnstile:'wrong-action-token'};assert.equal((await customerRequest('customer/register',b)).status,403);
+ assert.equal((await mf.dispatchFetch(origin+'/api/customer/register',{method:'POST',headers:{Origin:'https://attacker.test','Content-Type':'application/json'},body:JSON.stringify({...b,turnstile:'register-valid-token'})})).status,403);
+ assert.equal((await customerRequest('customer/register',{...b,password:'short',turnstile:'register-valid-token'})).status,400);assert.equal((await customerRequest('customer/register',{...b,username:'<script>',turnstile:'register-valid-token'})).status,400);
+ await db.prepare('DELETE FROM limits').run();for(let i=0;i<10;i++)assert.equal((await customerRequest('customer/login',{username:'absent_customer',password:'wrong-password'})).status,401);assert.equal((await customerRequest('customer/login',{username:'absent_customer',password:'wrong-password'})).status,429);
+});
+test('الجلسات محفوظة على الخادم، الدخول من جهاز آخر والخروج وانتهاء الجلسة',async()=>{
+ const u=await newCustomer(),r=await customerRequest('customer/login',{username:u.user.username.toUpperCase(),password:customerPassword});assert.equal(r.status,200);const second=r.headers.get('set-cookie').split(';')[0];
+ assert.equal((await customerRequest('customer/revoke-sessions',{},u.cookie)).status,200);assert.equal((await customerRequest('customer/me',undefined,second)).status,401);assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,200);
+ const bad=await customerRequest('customer/login',{username:u.user.username,password:'wrong-password'}),unknown=await customerRequest('customer/login',{username:'unknown_customer',password:'wrong-password'});assert.deepEqual(await bad.json(),await unknown.json());
+ assert.equal((await customerRequest('customer/logout',{},u.cookie)).status,200);assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,401);
+ const login=await customerRequest('customer/login',{username:u.user.username,password:customerPassword}),session=login.headers.get('set-cookie').split(';')[0];await db.prepare('UPDATE customer_sessions SET expires=0 WHERE customer_id=?').bind(u.user.id).run();assert.equal((await customerRequest('customer/me',undefined,session)).status,401);
+});
+test('كل عميل يرى طلباته فقط ولا يمكن تزوير الحساب أو إثبات الملكية بالهاتف',async()=>{
+ await db.prepare('UPDATE settings SET accepting=1,opening_hour=0,capacity=200').run();const a=await newCustomer(),b=await newCustomer();
+ const o={...order(),customer_id:b.user.id};assert.equal((await customerRequest('orders',o,a.cookie)).status,201);assert.equal((await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(o.id).first()).customer_id,a.user.id);
+ const mine=await(await customerRequest('customer/orders',undefined,a.cookie)).json(),other=await(await customerRequest('customer/orders',undefined,b.cookie)).json();assert.ok(mine.orders.some(x=>x.id===o.id));assert.equal(other.orders.length,0);
+ assert.equal((await customerRequest('track',{id:o.id},a.cookie)).status,200);assert.equal((await customerRequest('track',{id:o.id},b.cookie)).status,404);assert.equal((await customerRequest('track',{id:o.id})).status,404);
+ const view=await(await customerRequest('track',{id:o.id},a.cookie)).json();assert.equal(view.phone,undefined);assert.equal(view.token_hash,undefined);
+ await loginOwner();await request('admin/status',{id:o.id,status:'preparing'},true);await request('admin/status',{id:o.id,status:'ready'},true);
+ assert.equal((await customerRequest('order/acknowledge',{id:o.id},b.cookie)).status,404);assert.equal((await customerRequest('order/acknowledge',{id:o.id},a.cookie)).status,200);
+ assert.equal((await customerRequest('push/subscribe',{id:o.id,permission:'denied'},b.cookie)).status,404);assert.equal((await customerRequest('push/subscribe',{id:o.id,permission:'denied'},a.cookie)).status,200);
+});
+test('ربط الطلب القديم يحتاج رمز المتابعة ولا يمكن سرقة طلب مرتبط بعميل آخر',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();assert.equal((await request('orders',o)).status,201);
+ assert.equal((await customerRequest('customer/claim-order',{id:o.id,token:token()},a.cookie)).status,404);assert.equal((await customerRequest('customer/claim-order',{id:o.id,token:o.token},a.cookie)).status,200);assert.equal((await customerRequest('customer/claim-order',{id:o.id,token:o.token},b.cookie)).status,404);
+ assert.equal((await customerRequest('track',{id:o.id},a.cookie)).status,200);assert.equal((await customerRequest('customer/claim-order',{id:o.id},b.cookie)).status,400);
+});
+test('تغيير كلمة المرور والاسترداد يلغي الجلسات والأكواد القديمة',async()=>{
+ const u=await newCustomer(),login=await customerRequest('customer/login',{username:u.user.username,password:customerPassword}),other=login.headers.get('set-cookie').split(';')[0];
+ assert.equal((await customerRequest('customer/password',{current_password:'wrong',new_password:'another-password-123'},u.cookie)).status,401);assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,200);
+ const change=await customerRequest('customer/password',{current_password:customerPassword,new_password:'another-password-123'},u.cookie);assert.equal(change.status,200);const changed=await change.json(),fresh=change.headers.get('set-cookie').split(';')[0];assert.notEqual(changed.recovery_code,u.recovery_code);
+ assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,401);assert.equal((await customerRequest('customer/me',undefined,other)).status,401);assert.equal((await customerRequest('customer/me',undefined,fresh)).status,200);
+ assert.equal((await customerRequest('customer/login',{username:u.user.username,password:customerPassword})).status,401);
+ assert.equal((await customerRequest('customer/recover',{username:u.user.username,recovery_code:u.recovery_code,new_password:'reset-password-1234'})).status,401);
+ const recovery=await customerRequest('customer/recover',{username:u.user.username,recovery_code:changed.recovery_code,new_password:'reset-password-1234'});assert.equal(recovery.status,200);const reset=await recovery.json();assert.notEqual(reset.recovery_code,changed.recovery_code);assert.equal((await customerRequest('customer/me',undefined,fresh)).status,401);
+ assert.equal((await customerRequest('customer/recover',{username:u.user.username,recovery_code:changed.recovery_code,new_password:'reset-password-5678'})).status,401);assert.equal((await customerRequest('customer/login',{username:u.user.username,password:'reset-password-1234'})).status,200);
+});
+test('حذف العميل يحذف الجلسات ويبقي الطلب الجاري دون كشفه لحساب آخر',async()=>{
+ const u=await newCustomer(),o=order();await customerRequest('orders',o,u.cookie);assert.equal((await customerRequest('customer/profile',{name:'اسم مُعدل',phone:'+973 33333333'},u.cookie)).status,200);
+ assert.equal((await customerRequest('customer/delete',{password:'wrong'},u.cookie)).status,401);assert.equal((await customerRequest('customer/delete',{password:customerPassword},u.cookie)).status,200);
+ assert.equal(await db.prepare('SELECT id FROM customers WHERE id=?').bind(u.user.id).first(),null);assert.equal((await db.prepare('SELECT COUNT(*) n FROM customer_sessions WHERE customer_id=?').bind(u.user.id).first()).n,0);assert.equal((await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(o.id).first()).customer_id,null);
+ assert.equal((await customerRequest('customer/me',undefined,u.cookie)).status,401);assert.equal((await request('track',{id:o.id,token:o.token})).status,200);
 });

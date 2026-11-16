@@ -1,3 +1,4 @@
+import {authorizedCustomerOrder} from './customers.js';
 import {expansion} from './expansion.js';
 import {validatePreferences} from './customization.js';
 import {validPushEndpoint,pushConfigured,apnsConfigured,enqueueNotification,processNotifications} from './notifications.js';
@@ -9,7 +10,7 @@ export async function passwordHash(password){const salt=crypto.randomUUID();cons
 export async function operations(req,env,ctx,h,actor=null){
  const {body,text,fail,json,hash,rate}=h,url=new URL(req.url),p=url.pathname,m=req.method,ip=req.headers.get('CF-Connecting-IP')||'local';
  const expanded=await expansion(req,env,h,actor,audit);if(expanded)return expanded;
- async function owned(b){const o=await env.DB.prepare('SELECT * FROM orders WHERE id=? AND token_hash=?').bind(text(b.id,36,36),await hash(text(b.token,64,64))).first();if(!o){await rate(env,`ownership:${ip}`,15,600);fail('بيانات متابعة الطلب غير صحيحة',404);}return o;}
+ async function owned(b){const o=await authorizedCustomerOrder(env,h.customer,b.id,b.token,fail);if(!o){await rate(env,`ownership:${ip}`,15,600);fail('بيانات متابعة الطلب غير صحيحة',404);}return o;}
  async function owner(){if(actor?.role!=='owner')fail('هذه العملية للمالك فقط',403);}
  if(p==='/api/push/config'&&m==='GET')return json({webPush:pushConfigured(env),publicKey:env.VAPID_PUBLIC_KEY||'',iosRequiresStandalone:true});
  if(p==='/api/push/subscribe'&&m==='POST'){

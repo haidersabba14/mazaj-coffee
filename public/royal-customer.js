@@ -39,5 +39,6 @@
  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#install-native').hidden=false;});$('#install-native').onclick=async()=>{if(!installPrompt)return;await installPrompt.prompt();const choice=await installPrompt.userChoice;$('#install-state').textContent=choice.outcome==='accepted'?'تم طلب التثبيت. افتح الأيقونة من الشاشة الرئيسية.':'تقدر تثبّت التطبيق لاحقًا.';installPrompt=null;$('#install-native').hidden=true;};
  window.addEventListener('appinstalled',()=>{$('#install-state').textContent='تم تثبيت التطبيق ✓';$('#install-native').hidden=true;});document.addEventListener('visibilitychange',()=>{updateRinging();if(!document.hidden&&order)void window.royalOrderRefresh?.();});
  if('serviceWorker'in navigator)navigator.serviceWorker.addEventListener('message',e=>{if(['ROYAL_PUSH','MAZAJ_ORDER_NOTIFICATION'].includes(e.data?.type)&&order?.id===e.data.orderId)void window.royalOrderRefresh?.();});
+ window.addEventListener('royal-private-order-cleared',()=>{order=null;updateRinging();$('#acknowledge-call').hidden=true;});
  void call('push/config').then(c=>pushConfig=c).catch(()=>{});render();
 })();
