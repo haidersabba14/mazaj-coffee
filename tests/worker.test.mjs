@@ -254,7 +254,7 @@ test('المفضلة والتخصيص محفوظة بالحساب ومعزولة
  const a=await newCustomer(),b=await newCustomer();assert.equal((await request('customer/preferences')).status,401);
  const prefs=await(await customerRequest('customer/preferences',undefined,a.cookie)).json();assert.equal(prefs.version,0);
  const payload={customer_id:a.user.id,version:0,favorites:['tea','iced-latte'],customization:{milk:'whole',size:'small',sugar:'light'}};
- assert.equal((await customerRequest('customer/preferences',payload,a.cookie)).status,200);
+ assert.equal((await customerRequest('customer/preferences',{...payload,customer_id:b.user.id},a.cookie)).status,409);assert.equal((await customerRequest('customer/preferences',payload,a.cookie)).status,200);
  const saved=await(await customerRequest('customer/preferences',undefined,a.cookie)).json();assert.deepEqual(saved.favorites,payload.favorites);assert.equal(saved.customization.size,'small');assert.equal(saved.version,1);
  assert.deepEqual((await(await customerRequest('customer/preferences',undefined,b.cookie)).json()).favorites,[]);
  assert.equal((await customerRequest('customer/preferences',payload,a.cookie)).status,409);
@@ -292,7 +292,7 @@ test('الفاتورة خاصة بالطلب ولا تكشف هاتفًا أو �
 });
 test('إدارة العملاء للمالك فقط وحظر الحساب يلغي الجلسات دون حذف الطلبات',async()=>{
  const a=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);assert.equal((await customerRequest('admin/customers',undefined,a.cookie)).status,401);await loginOwner();
- const list=await(await request('admin/customers?q='+encodeURIComponent(a.user.username),undefined,true)).json();assert.equal(list.customers.length,1);const c=list.customers[0];assert.equal(c.order_count,1);for(const key of ['password_hash','recovery_hash','session_hash'])assert.equal(c[key],undefined);
+ assert.equal((await request('admin/customers?offset=0.5',undefined,true)).status,400);const list=await(await request('admin/customers?q='+encodeURIComponent(a.user.username),undefined,true)).json();assert.equal(list.customers.length,1);const c=list.customers[0];assert.equal(c.order_count,1);for(const key of ['password_hash','recovery_hash','session_hash'])assert.equal(c[key],undefined);
  assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:true},true)).status,200);assert.equal((await customerRequest('customer/me',undefined,a.cookie)).status,401);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,401);assert.ok(await db.prepare('SELECT id FROM orders WHERE id=?').bind(o.id).first());assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:false},true)).status,200);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,200);
  const staffId=crypto.randomUUID();await db.prepare("INSERT INTO staff VALUES(?,?,?,?,'staff',1,?)").bind(staffId,'suite_staff','موظف','unused',Date.now()/1000).run();const key=token();await db.prepare('INSERT INTO sessions(token_hash,created_at,expires,user_id,device_name) VALUES(?,?,?,?,?)').bind(await hash(key),1,Math.floor(Date.now()/1000)+3600,staffId,'test').run();assert.equal((await customerRequest('admin/customers',undefined,'session='+key)).status,403);
 });
