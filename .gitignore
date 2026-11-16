@@ -15,3 +15,6 @@ ios/build/
 *.xcarchive/
 
 .wrangler/
+ios-manager/*.xcodeproj/
+ios-manager/build/
+*.p8

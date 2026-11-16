@@ -1,0 +1,1 @@
+INSERT OR IGNORE INTO products(id,name,description,category,image,available,sort) VALUES('tea','شاي','شاي ساخن بطعم أصيل. سكر عادي، بحجم صغير أو وسط.','hot','/images/tea.webp',1,11),('arabic-coffee','قهوة عربية','قهوة عربية عطرة بالهيل. سكر عادي، بحجم صغير أو وسط.','hot','/images/arabic-coffee.webp',1,12);

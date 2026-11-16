@@ -27,6 +27,6 @@ test('تنبيه المتصفح يستعمل الجلسة المسموحة وي�
  const dom=await setup(true,true),w=dom.window;try{
   const notifications=[];w.Notification={permission:'granted'};Object.defineProperty(w.navigator,'serviceWorker',{configurable:true,value:{ready:Promise.resolve({showNotification:async(title,options)=>notifications.push({title,...options})})}});
   await placeOrder(dom);w.__orderStatus='cancelled';w.__rejection='انتهى توفر المشروب';await vm.runInContext('pollOrderStatus(true)',dom.getInternalVMContext());
-  assert.equal(notifications.length,1);assert.equal(notifications[0].title,'تم رفض الطلب');assert.ok(notifications[0].body.includes('انتهى توفر'));assert.ok(notifications[0].tag.startsWith('mazaj-order-'));
+  assert.equal(notifications.length,1);assert.equal(notifications[0].title,'تم رفض الطلب');assert.ok(notifications[0].body.includes('انتهى توفر'));assert.ok(notifications[0].tag.startsWith('royal-'));
  }finally{w.close();}
 });
