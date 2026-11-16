@@ -1,0 +1,10 @@
+import{test}from'node:test';import assert from'node:assert/strict';import{readFile}from'node:fs/promises';import vm from'node:vm';import{JSDOM}from'jsdom';
+const html=await readFile('public/card.html','utf8'),source=await readFile('public/card.js','utf8');
+test('الخروج يمسح بطاقة الحساب ورمزها المؤقت ولا يحولها لبطاقة ضيف ظاهرة',async()=>{
+ const dom=new JSDOM(html,{url:'https://coffee.test/card.html',runScripts:'outside-only'}),w=dom.window,d=w.document;let signed=true,card=null,guestReads=0;
+ w.qrcode=()=>({addData(){},make(){},createSvgTag(){return '<svg></svg>';}});
+ w.fetch=async(path,options)=>{if(path==='/api/customer/me')return{ok:signed,json:async()=>signed?{user:{id:'account-a',name:'عميل'}}:{error:'login'}};if(path==='/api/customer/loyalty')return{ok:true,json:async()=>({card})};if(path==='/api/customer/loyalty-create'){const b=JSON.parse(options.body);card={id:b.id,name:'اسم خاص',card_number:'1234567',remaining:5,stamps:0,reward_drinks:0,account_linked:true};return{ok:true,json:async()=>({card,created:true})};}if(path==='/api/card'){guestReads++;return{ok:true,json:async()=>card};}throw Error('unexpected '+path);};
+ try{vm.runInContext(source,dom.getInternalVMContext());await new Promise(r=>setTimeout(r,15));d.querySelector('#create-card [name=name]').value='اسم خاص';d.querySelector('#create-card [name=contact]').value='33333333';d.querySelector('#create-card').dispatchEvent(new w.Event('submit',{cancelable:true}));await new Promise(r=>setTimeout(r,15));assert.equal(d.querySelector('#card-result').hidden,false);assert.equal(d.querySelector('#card-name').textContent,'اسم خاص');assert.equal(w.localStorage.getItem('mazaj-loyalty'),null);
+ signed=false;w.dispatchEvent(new w.StorageEvent('storage',{key:'royal-auth-change',newValue:'{"type":"logout"}'}));await new Promise(r=>setTimeout(r,20));assert.equal(d.querySelector('#card-result').hidden,true);assert.equal(d.querySelector('#card-name').textContent,'');assert.equal(d.querySelector('#loyalty-qr').textContent,'');assert.equal(guestReads,0);
+ }finally{w.close();}
+});
