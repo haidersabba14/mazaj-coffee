@@ -1,9 +1,35 @@
 import SwiftUI
-struct ProductsView:View{
-    @EnvironmentObject var store:RoyalStore
-    @State private var editing:RoyalProduct?
-    @State private var adding=false
-    var body:some View{NavigationStack{List{if !store.error.isEmpty{Text(store.error).foregroundStyle(.red)};ForEach(store.data?.products ?? []){p in HStack(spacing:14){AsyncImage(url:URL(string:p.image,relativeTo:royalBase)){image in image.resizable().scaledToFill()}placeholder:{Color.royalGreen}.frame(width:62,height:62).clipShape(RoundedRectangle(cornerRadius:10));VStack(alignment:.leading,spacing:7){Text(p.name).font(.headline);Text("\(p.available==1 ? "متاح":"مخفي") · المخزون: \(p.stock<0 ? "غير محدود":String(p.stock))").font(.caption).foregroundStyle(.secondary)};Spacer();if store.owner{Button("تعديل"){editing=p}}}}.navigationTitle("المشروبات والمخزون").refreshable{await store.refresh()}.toolbar{if store.owner{Button{adding=true}label:{Image(systemName:"plus")}}}.sheet(item:$editing){ProductEditor(product:$0)}.sheet(isPresented:$adding){ProductEditor(product:nil)}}}
+struct ProductsView: View {
+    @EnvironmentObject var store: RoyalStore
+    @State private var editing: RoyalProduct?
+    @State private var adding = false
+    var body: some View {
+        NavigationStack {
+            List {
+                if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
+                ForEach(store.data?.products ?? []) { product in
+                    HStack(spacing: 14) {
+                        AsyncImage(url: URL(string: product.image, relativeTo: royalBase)) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: { Color.royalGreen }
+                            .frame(width: 62, height: 62).clipShape(RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(product.name).font(.headline)
+                            Text("\(product.available == 1 ? "متاح" : "مخفي") · المخزون: \(product.stock < 0 ? "غير محدود" : String(product.stock))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if store.owner { Button("تعديل") { editing = product } }
+                    }
+                }
+            }
+            .navigationTitle("المشروبات والمخزون")
+            .refreshable { await store.refresh() }
+            .toolbar { if store.owner { Button { adding = true } label: { Image(systemName: "plus") } } }
+            .sheet(item: $editing) { ProductEditor(product: $0) }
+            .sheet(isPresented: $adding) { ProductEditor(product: nil) }
+        }
+    }
 }
 struct ProductEditor:View{
     @EnvironmentObject var store:RoyalStore

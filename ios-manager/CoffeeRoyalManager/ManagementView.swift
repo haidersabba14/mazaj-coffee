@@ -26,11 +26,37 @@ struct StaffEditor:View{
     @State private var name="";@State private var username="";@State private var password="";@State private var role="staff";@State private var active=true
     var body:some View{NavigationStack{Form{TextField("الاسم",text:$name);TextField("اسم المستخدم بالإنجليزية",text:$username).textInputAutocapitalization(.never).autocorrectionDisabled();SecureField(staff==nil ? "كلمة مرور — ١٠ أحرف على الأقل":"كلمة مرور جديدة (اختياري)",text:$password);Picker("الصلاحية",selection:$role){Text("موظف").tag("staff");Text("مالك").tag("owner")};Toggle("حساب مفعّل",isOn:$active);Button("حفظ وإلغاء جلساته السابقة"){Task{var b:[String:Any]=["name":name,"username":username,"password":password,"role":role,"active":active];if let staff{b["id"]=staff.id};if await store.action("staff",b){dismiss()}}}.disabled(store.busy||name.count<2||username.count<3);if !store.error.isEmpty{Text(store.error).foregroundStyle(.red)}}.navigationTitle(staff==nil ? "حساب جديد":"تعديل الحساب").toolbar{Button("إغلاق"){dismiss()}}.onAppear{name=staff?.name ?? "";username=staff?.username ?? "";role=staff?.role ?? "staff";active=staff?.active != 0}}}
 }
-struct NotificationsView:View{
-    @EnvironmentObject var store:RoyalStore
-    @State private var jobs:[PushJob]=[]
-    var body:some View{List{Section{Text("قبول المزوّد للإشعار لا يؤكد وصوله للجهاز. تأكيد الزبون يظهر داخل الطلب.").font(.caption)};ForEach(jobs){j in VStack(alignment:.leading,spacing:8){Text(j.order_id.flatMap{id in store.data?.orders.first{$0.id==id}?.number} ?? "طلب مؤرشف");Text(notificationTitle(j.state));Text("\(j.kind) · \(j.attempts)/4").font(.caption).foregroundStyle(.secondary);if ["failed","retry","unconfigured","no_subscription"].contains(j.state)&&j.attempts<4{Button("إعادة المحاولة"){Task{_=await store.action("notification-retry",["id":j.id]);await load()}}}}}.navigationTitle("الإشعارات").task{await load()}.refreshable{await load()}}
-    private func load() async{do{struct Reply:Decodable{let jobs:[PushJob]};jobs=try JSONDecoder().decode(Reply.self,from:await store.call("admin/notifications")).jobs}catch{store.error=error.localizedDescription}}
+struct NotificationsView: View {
+    @EnvironmentObject var store: RoyalStore
+    @State private var jobs: [PushJob] = []
+    var body: some View {
+        List {
+            Section {
+                Text("قبول المزوّد للإشعار لا يؤكد وصوله للجهاز. تأكيد الزبون يظهر داخل الطلب.").font(.caption)
+            }
+            ForEach(jobs) { job in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(job.order_id.flatMap { id in store.data?.orders.first { $0.id == id }?.number } ?? "طلب مؤرشف")
+                    Text(notificationTitle(job.state))
+                    Text("\(job.kind) · \(job.attempts)/4").font(.caption).foregroundStyle(.secondary)
+                    if ["failed","retry","unconfigured","no_subscription"].contains(job.state) && job.attempts < 4 {
+                        Button("إعادة المحاولة") {
+                            Task { _ = await store.action("notification-retry", ["id": job.id]); await load() }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("الإشعارات")
+        .task { await load() }
+        .refreshable { await load() }
+    }
+    private func load() async {
+        do {
+            struct Reply: Decodable { let jobs: [PushJob] }
+            jobs = try JSONDecoder().decode(Reply.self, from: await store.call("admin/notifications")).jobs
+        } catch { store.error = error.localizedDescription }
+    }
 }
 struct SessionsView:View{
     @EnvironmentObject var store:RoyalStore
