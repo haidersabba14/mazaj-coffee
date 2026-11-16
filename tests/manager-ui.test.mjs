@@ -1,0 +1,15 @@
+import{test}from'node:test';import assert from'node:assert/strict';import{readFile}from'node:fs/promises';import vm from'node:vm';import{JSDOM}from'jsdom';
+const html=await readFile('public/manager.html','utf8'),tools=await readFile('public/manager-tools.js','utf8'),source=await readFile('public/manager.js','utf8');const pause=()=>new Promise(r=>setTimeout(r,20));
+async function setup({delayData=false,delayCustomers=false}={}){
+ const dom=new JSDOM(html,{url:'https://coffee.test/manager.html',runScripts:'outside-only'}),w=dom.window;let resolveData,resolveCustomers;
+ w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','')};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open')};w.matchMedia=()=>({matches:false});w.confirm=()=>true;
+ const response=b=>({ok:true,status:200,json:async()=>b}),data={orders:[],products:[],settings:{},stats:{},popular:[]},customers={customers:[{id:'account-a',name:'PRIVATE CUSTOMER',username:'private_user',phone:'33333333',blocked:0,order_count:1,last_order_at:null,card_number:null}],offset:0,has_more:false};
+ w.fetch=async path=>{if(path==='/api/admin/me')return response({user:{id:'owner',name:'المالك',role:'owner'}});if(path==='/api/admin/preferences')return response({settings:{}});if(path==='/api/admin/staff')return response({staff:[]});if(path.startsWith('/api/admin/data?'))return delayData?await new Promise(r=>resolveData=()=>r(response(data))):response(data);if(path.startsWith('/api/admin/customers?'))return delayCustomers?await new Promise(r=>resolveCustomers=()=>r(response(customers))):response(customers);if(path==='/api/admin/logout')return response({ok:true});throw Error('unexpected '+path);};
+ vm.runInContext(tools,dom.getInternalVMContext());vm.runInContext(source,dom.getInternalVMContext());await pause();return{dom,w,d:w.document,releaseData:()=>resolveData(),releaseCustomers:()=>resolveCustomers()};
+}
+test('فتح قسم العملاء أثناء تحميل البيانات الأول لا يترك واجهة فارغة',async()=>{
+ const {dom,d,releaseData}=await setup({delayData:true});try{assert.equal(d.querySelector('#manager-app').hidden,false);d.querySelector('[data-page=customers]').click();await pause();assert.equal(d.querySelector('#customer-search'),null);releaseData();await pause();assert.ok(d.querySelector('#customer-search'));assert.equal(d.querySelectorAll('.customer-admin-card').length,1);}finally{dom.window.close();}
+});
+test('الخروج يلغي عرض بيانات الإدارة ويمنع الاستجابة القديمة من إعادتها',async()=>{
+ const {dom,d,releaseCustomers}=await setup({delayCustomers:true});try{d.querySelector('[data-page=customers]').click();await pause();d.querySelector('#manager-logout').click();await pause();assert.equal(d.querySelector('#manager-app').hidden,true);assert.equal(d.querySelector('#manager-content').textContent,'');releaseCustomers();await pause();assert.equal(d.querySelector('#manager-content').textContent,'');assert.equal(d.querySelector('#manager-detail-body').textContent,'');assert.equal(d.querySelector('#manager-content').textContent.includes('PRIVATE CUSTOMER'),false);}finally{dom.window.close();}
+});
