@@ -1,7 +1,7 @@
 (()=>{
  const $=s=>document.querySelector(s);let order=null,context=null,ringTimer=null,installPrompt=null,pushConfig=null,subscribedTo='',soundOn=false;
  try{order=JSON.parse(localStorage.getItem('mazaj-receipt'));}catch{}
- const preferences=(()=>{try{return JSON.parse(localStorage.getItem('royal-sound'))||{tone:'royal',volume:.65};}catch{return {tone:'royal',volume:.65};}})();
+ const preferences=(()=>{try{return {tone:'royal',volume:.65,...JSON.parse(localStorage.getItem('royal-sound')||'{}')};}catch{return {tone:'royal',volume:.65};}})();
  $('#sound-tone').value=preferences.tone;
  async function call(path,data){const r=await fetch('/api/'+path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const b=await r.json();if(!r.ok)throw Error(b.error||'تعذر الاتصال');return b;}
  function help(message){$('#order-notification-help').textContent=message;}

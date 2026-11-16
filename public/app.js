@@ -62,7 +62,7 @@ function renderOrderStage(o){
 }
 async function notifyOrderDecision(o){
  const copy=orderStageCopy(o);$('#order-decision-alert').hidden=false;$('#order-decision-alert').className='order-decision-alert '+copy.kind;$('#order-decision-title').textContent=copy.title;$('#order-decision-body').textContent=copy.message;toast(copy.title);if(typeof navigator.vibrate==='function')navigator.vibrate([120,80,120]);
- if('Notification'in window&&Notification.permission==='granted'&&'serviceWorker'in navigator){try{const registration=await navigator.serviceWorker.ready;await registration.showNotification(copy.title,{body:copy.message,icon:'/images/icon-192.png',badge:'/images/icon-192.png',tag:'royal-'+o.id,data:{url:'/',orderId:o.id},renotify:true});}catch{/* The on-page status and alert remain visible when the browser cannot show notifications. */}}
+ if(o.status!=='ready'&&'Notification'in window&&Notification.permission==='granted'&&'serviceWorker'in navigator){try{const registration=await navigator.serviceWorker.ready;await registration.showNotification(copy.title,{body:copy.message,icon:'/images/icon-192.png',badge:'/images/icon-192.png',tag:'royal-'+o.id,data:{url:'/',orderId:o.id},renotify:true});}catch{/* The on-page status and alert remain visible when the browser cannot show notifications. */}}
  window.mazajI18n?.apply();
 }
 async function pollOrderStatus(force=false){
@@ -92,8 +92,7 @@ $('#go-cart').onclick=showCart;
 
 function matchesSearch(p){const normalize=s=>String(s).toLowerCase().normalize('NFKD').replace(/[\u064b-\u065f]/g,'').replace(/[أإآ]/g,'ا');const q=normalize($('#drink-search').value);return !q||normalize(p.name+' '+p.description+' '+p.id).includes(q);}
 $('#drink-search').oninput=renderProducts;$('#favorites-only').onclick=()=>{favoritesOnly=!favoritesOnly;$('#favorites-only').classList.toggle('active',favoritesOnly);renderProducts();};
-$('#surprise').onclick=async()=>{if(!catalog.length)return;const index=crypto.getRandomValues(new Uint32Array(1))[0]%catalog.length;add(catalog[index].id);toast('اختيار مزاج لك: '+catalog[index].name);await showCart();};
-$('#reorder').onclick=async()=>{let last;try{last=JSON.parse(localStorage.getItem('mazaj-last-order'));}catch{}if(!last?.items?.length){toast('ما عندك طلب سابق على هذا الجهاز');return;}const item=last.items.find(i=>catalog.some(p=>p.id===i.id));if(!item){toast('المشروب السابق غير متاح حاليًا');return;}redeemMode=false;cart=[{id:item.id,quantity:1}];pending=null;for(const [key,value] of Object.entries(last.customization||{})){if($('#checkout').elements[key])$('#checkout').elements[key].value=value;}await showCart();};
+$('#reorder').onclick=async()=>{let last;try{last=JSON.parse(localStorage.getItem('mazaj-last-order'));}catch{}if(!last?.items?.length){toast('ما عندك طلب سابق على هذا الجهاز');return;}const item=last.items.find(i=>catalog.some(p=>p.id===i.id));if(!item){toast('المشروب السابق غير متاح حاليًا');return;}redeemMode=false;cart=[{id:item.id,quantity:1}];pending=null;for(const [key,value] of Object.entries(last.customization||{})){if($('#checkout').elements[key]&&Array.from($('#checkout').elements[key].options||[]).some(o=>o.value===value))$('#checkout').elements[key].value=value;}await showCart();};
 if(new URLSearchParams(location.search).get('reward')==='1'&&loyaltyOwner)api('card',loyaltyOwner).then(c=>{if(c.reward_drinks>=2){redeemMode=true;cart=[];save();$('#reward-banner').hidden=false;toast('اختر مشروبين للمكافأة');}else toast('ليس لديك رصيد مكافأة لمشروبين بعد');}).catch(err=>toast(err.message));
 $('#lang-toggle').onclick=()=>{window.mazajI18n?.toggle();};
 

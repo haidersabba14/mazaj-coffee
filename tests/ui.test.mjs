@@ -30,3 +30,17 @@ test('تنبيه المتصفح يستعمل الجلسة المسموحة وي�
   assert.equal(notifications.length,1);assert.equal(notifications[0].title,'تم رفض الطلب');assert.ok(notifications[0].body.includes('انتهى توفر'));assert.ok(notifications[0].tag.startsWith('royal-'));
  }finally{w.close();}
 });
+
+test('واجهة الاستدعاء تعرض رقم CR وتؤكد التنبيه بعد حفظ التأكيد فقط',async()=>{
+ const dom=await setup(true,true),w=dom.window,d=w.document;try{
+  w.matchMedia=()=>({matches:false});const originalFetch=w.fetch;let acknowledged=false;
+  w.fetch=async(path,options)=>{
+   if(path==='/api/push/config')return {ok:true,json:async()=>({webPush:true,publicKey:'test'})};
+   if(path==='/api/order/acknowledge'){acknowledged=true;return {ok:true,json:async()=>({ok:true,acknowledged_at:123456})};}
+   const r=await originalFetch(path,options);if(path==='/api/track'){const b=await r.json();return {ok:true,json:async()=>({...b,order_number:1042,order_label:'CR-1042',called_at:b.status==='ready'?123000:null,acknowledged_at:acknowledged?123456:null})};}return r;
+  };
+  vm.runInContext(await readFile('public/royal-customer.js','utf8'),dom.getInternalVMContext());await placeOrder(dom);w.__orderStatus='ready';await vm.runInContext('pollOrderStatus(true)',dom.getInternalVMContext());
+  assert.equal(d.querySelector('#royal-order-number').textContent,'CR-1042');assert.equal(d.querySelector('#acknowledge-call').hidden,false);assert.equal(acknowledged,false);d.querySelector('#acknowledge-call').click();await new Promise(r=>setTimeout(r,30));assert.equal(acknowledged,true);assert.equal(d.querySelector('#acknowledge-call').hidden,true);assert.equal(JSON.parse(w.localStorage.getItem('mazaj-receipt')).acknowledged_at,123456);
+ }finally{w.close();}
+});
+test('لا توجد خيارات مفاجأة أو حجم كبير في المتجر',()=>{const d=new JSDOM(html).window.document;assert.equal(d.querySelector('#surprise'),null);assert.deepEqual([...d.querySelectorAll('[name=size] option')].map(o=>o.value),['medium','small']);});
