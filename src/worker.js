@@ -63,7 +63,7 @@ async function route(req,env,ctx){
 
   if(b.items.some(i=>['tea','arabic-coffee'].includes(i.id))){if(customization.sugar&&customization.sugar!=='normal')fail('الشاي والقهوة العربية بسكر عادي فقط');customization.sugar='normal';}
   const requestHash=await hash(JSON.stringify({name,phone,notes,items:b.items,fulfillment,address,lat,lng,customization,branchId:b.branch_id||'main',rewardCardId:rewardCard?.id||null}));const tokenHash=await hash(token);
-  const existing=await env.DB.prepare('SELECT * FROM orders WHERE id=?').bind(id).first();if(existing){if(existing.token_hash!==tokenHash||existing.request_hash!==requestHash)fail('رقم طلب مستخدم',409);return json({id,order_number:existing.order_number,order_label:orderLabel(existing),status:existing.status,items:JSON.parse(existing.items),total:existing.total,subtotal:existing.subtotal});}
+  const existing=await env.DB.prepare('SELECT * FROM orders WHERE id=?').bind(id).first();if(existing){if(existing.token_hash!==tokenHash||existing.request_hash!==requestHash)fail('رقم طلب مستخدم',409);return json({id,order_number:existing.order_number,order_label:orderLabel(existing),status:existing.status,items:JSON.parse(existing.items),total:existing.total,subtotal:existing.subtotal,fulfillment:existing.fulfillment});}
   await rate(env,`order:${ip}`,5,600);
   const s=await env.DB.prepare('SELECT * FROM settings WHERE id=1').first();if(!isOpen(s))fail(`استقبال الطلبات مغلق. نفتح الساعة ${s.opening_hour===15?'٣ عصرًا':s.opening_hour+':00'} بتوقيت البحرين.`,409);
   await checkTurnstile(req,env,b.turnstile);
@@ -110,8 +110,8 @@ async function route(req,env,ctx){
   }
   if(p==='/api/admin/stamp'&&m==='POST'){
    const b=await body(req),id=text(b.id,36,36),event=text(b.event_id,36,36);const card=await env.DB.prepare('SELECT id FROM loyalty_cards WHERE id=? AND blocked=0').bind(id).first();if(!card)fail('البطاقة غير موجودة',404);
-   await env.DB.batch([env.DB.prepare("INSERT OR IGNORE INTO loyalty_events(id,card_id,kind,created_at) VALUES(?,?,'stamp',?)").bind(event,id,now()),env.DB.prepare('UPDATE loyalty_cards SET reward_drinks=reward_drinks+CASE WHEN stamps=4 THEN 2 ELSE 0 END,stamps=(stamps+1)%5,total_stamps=total_stamps+1 WHERE id=? AND changes()=1').bind(id)]);
-   return json(cardView(await env.DB.prepare('SELECT * FROM loyalty_cards WHERE id=?').bind(id).first()));
+   const stamped=await env.DB.batch([env.DB.prepare("INSERT OR IGNORE INTO loyalty_events(id,card_id,kind,created_at) VALUES(?,?,'stamp',?)").bind(event,id,now()),env.DB.prepare('UPDATE loyalty_cards SET reward_drinks=reward_drinks+CASE WHEN stamps=4 THEN 2 ELSE 0 END,stamps=(stamps+1)%5,total_stamps=total_stamps+1 WHERE id=? AND changes()=1').bind(id)]);
+   if(stamped[0].meta.changes)await audit(env,actor,'loyalty_stamp',null,id);return json(cardView(await env.DB.prepare('SELECT * FROM loyalty_cards WHERE id=?').bind(id).first()));
   }
   if(p==='/api/admin/data'&&m==='GET'){
    const q=(url.searchParams.get('q')||'').slice(0,100),status=url.searchParams.get('status')||'',date=url.searchParams.get('date')||'';

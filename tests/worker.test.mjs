@@ -98,10 +98,10 @@ test('أرقام CR فريدة وحالات صحيحة واستدعاء واحد
  assert.equal((await request('admin/status',{id:b.id,status:'ready',version:2},true)).status,200);
  await Promise.all([request('admin/call',{id:b.id},true),request('admin/call',{id:b.id},true)]);
  const o=await db.prepare('SELECT * FROM orders WHERE id=?').bind(b.id).first();assert.equal(o.call_count,1);assert.equal(o.acknowledged_at,null);
- const jobs=await db.prepare("SELECT COUNT(*) n FROM notification_jobs WHERE order_id=? AND kind='ready'").bind(b.id).first();assert.equal(jobs.n,1);
+ const jobs=await db.prepare("SELECT COUNT(*) n FROM notification_jobs WHERE order_id=? AND kind='ready'").bind(b.id).first();assert.equal(jobs.n,1);const sent=await db.prepare("SELECT state FROM notification_jobs WHERE order_id=? AND kind='ready'").bind(b.id).first();assert.equal(sent.state,'sent');const acceptedCount=await db.prepare("SELECT COUNT(*) n FROM notification_attempts a JOIN notification_jobs j ON j.id=a.job_id WHERE j.order_id=? AND j.kind='ready' AND a.state='sent'").bind(b.id).first();assert.equal(acceptedCount.n,1);
  const tracked=await(await request('track',{id:a.order_label,token:b.token})).json();assert.equal(tracked.id,b.id);assert.equal(tracked.name,undefined);assert.ok(tracked.called_at);
  assert.equal((await request('order/acknowledge',{id:b.id,token:token()})).status,404);assert.equal((await request('order/acknowledge',{id:b.id,token:b.token})).status,200);
- const ack=await(await request('order/acknowledge',{id:b.id,token:b.token})).json();assert.ok(ack.acknowledged_at);assert.equal((await db.prepare('SELECT acknowledged_at FROM orders WHERE id=?').bind(b.id).first()).acknowledged_at,ack.acknowledged_at);
+ const ack=await(await request('order/acknowledge',{id:b.id,token:b.token})).json();assert.ok(ack.acknowledged_at);assert.ok((await(await request('admin/audit',undefined,true)).json()).events.some(e=>e.action==='customer_acknowledged'&&e.order_id===b.id));assert.equal((await db.prepare('SELECT acknowledged_at FROM orders WHERE id=?').bind(b.id).first()).acknowledged_at,ack.acknowledged_at);
  assert.equal((await request('admin/status',{id:b.id,status:'delivered'},true)).status,200);assert.equal((await request('admin/status',{id:b.id,status:'new'},true)).status,409);
  const stored=await db.prepare('SELECT ready_at,delivered_at,preparation_started_at FROM orders WHERE id=?').bind(b.id).first();assert.ok(stored.ready_at&&stored.delivered_at&&stored.preparation_started_at);
 });

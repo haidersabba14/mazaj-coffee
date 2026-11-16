@@ -24,7 +24,7 @@ async function sendWeb(env,device,payload){
  if(!pushConfigured(env))return {state:'unconfigured',code:'vapid_not_configured'};
  if(!validPushEndpoint(device.endpoint))return {state:'failed',code:'invalid_endpoint'};
  const options=await buildPushPayload({data:JSON.stringify(payload),options:{ttl:3600,urgency:'high',topic:payload.orderId.replace(/-/g,'').slice(0,32)}},{endpoint:device.endpoint,expirationTime:null,keys:JSON.parse(device.keys)},{subject:env.VAPID_SUBJECT||'https://mazaj-cafe-995.pages.dev',publicKey:env.VAPID_PUBLIC_KEY,privateKey:env.VAPID_PRIVATE_KEY});
- const r=await fetch(device.endpoint,{...options,redirect:'error',signal:AbortSignal.timeout(10000)});
+ const r=await fetch(device.endpoint,{...options,redirect:'manual',signal:AbortSignal.timeout(10000)});
  return {state:r.ok?'sent':[404,410].includes(r.status)?'expired':'failed',status:r.status,code:r.ok?'':'push_http_'+r.status};
 }
 export async function processNotifications(env,limit=8){
