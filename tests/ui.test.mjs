@@ -43,7 +43,7 @@ test('واجهة الاستدعاء تعرض رقم CR وتؤكد التنبيه
   assert.equal(d.querySelector('#royal-order-number').textContent,'CR-1042');assert.equal(d.querySelector('#acknowledge-call').hidden,false);assert.equal(acknowledged,false);d.querySelector('#acknowledge-call').click();await new Promise(r=>setTimeout(r,30));assert.equal(acknowledged,true);assert.equal(d.querySelector('#acknowledge-call').hidden,true);assert.equal(JSON.parse(w.localStorage.getItem('mazaj-receipt')).acknowledged_at,123456);
  }finally{w.close();}
 });
-test('لا توجد خيارات مفاجأة أو حجم كبير في المتجر',()=>{const d=new JSDOM(html).window.document;assert.equal(d.querySelector('#surprise'),null);assert.deepEqual([...d.querySelectorAll('[name=size] option')].map(o=>o.value),['medium','small']);});
+test('لا توجد خيارات مفاجأة أو حجم كبير في المتجر',()=>{const d=new JSDOM(html).window.document;assert.equal(d.querySelector('#surprise'),null);for(const select of d.querySelectorAll('[name=size]'))assert.deepEqual([...select.options].map(o=>o.value),['medium','small']);});
 
 test('معاينة المشروب تحفظ الحجم المختار للطلب والمفضلة قابلة للإلغاء',async()=>{
  const dom=await setup(),w=dom.window,d=w.document;try{

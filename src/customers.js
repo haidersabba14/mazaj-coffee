@@ -19,7 +19,7 @@ export async function verifyCustomerPassword(env,password,stored){
 }
 export async function customerFromRequest(req,env){
  const token=cookieToken(req);if(!token)return null;
- return env.DB.prepare('SELECT c.id,c.username,c.name,c.phone,c.created_at,c.password_hash,c.recovery_hash,c.auth_version,s.token_hash session_hash FROM customer_sessions s JOIN customers c ON c.id=s.customer_id AND c.auth_version=s.auth_version WHERE s.token_hash=? AND s.expires>?').bind(await digest(token),now()).first();
+ return env.DB.prepare('SELECT c.id,c.username,c.name,c.phone,c.created_at,c.password_hash,c.recovery_hash,c.auth_version,s.token_hash session_hash FROM customer_sessions s JOIN customers c ON c.id=s.customer_id AND c.auth_version=s.auth_version WHERE s.token_hash=? AND s.expires>? AND c.blocked=0').bind(await digest(token),now()).first();
 }
 // The same access check protects tracking, push subscription and acknowledgement.
 // Account ownership is set by the server; a phone number never proves ownership.
@@ -56,13 +56,13 @@ export async function customerRoutes(req,env,h){
   configured();await rate(env,'customer-login:'+ip,10,900);const b=await read(),user=username(b.username);await rate(env,'customer-login-user:'+user,30,900);
   if(typeof b.password!=='string'||b.password.length<1||b.password.length>128)fail('اسم المستخدم أو كلمة المرور غير صحيحة',401);
   const c=await env.DB.prepare('SELECT * FROM customers WHERE username=?').bind(user).first();
-  const valid=await verifyCustomerPassword(env,b.password,c?.password_hash);if(!valid||!c)fail('اسم المستخدم أو كلمة المرور غير صحيحة',401);
+  const valid=await verifyCustomerPassword(env,b.password,c?.password_hash);if(!valid||!c||c.blocked)fail('اسم المستخدم أو كلمة المرور غير صحيحة',401);
   const token=random();await(await sessionStatement(c,token)).run();return json({user:view(c)},200,{'Set-Cookie':cookie(token)});
  }
  if(p==='/api/customer/recover'&&m==='POST'){
   configured();await rate(env,'customer-recover:'+ip,5,900);const b=await read(),user=username(b.username),pass=password(b.new_password);
   if(typeof b.recovery_code!=='string'||!/^[a-f0-9]{64}$/.test(b.recovery_code))fail('بيانات الاسترداد غير صحيحة',401);
-  const oldHash=await keyed(env,'customer-recovery-v1:'+b.recovery_code),c=await env.DB.prepare('SELECT id FROM customers WHERE username=? AND recovery_hash=?').bind(user,oldHash).first();if(!c)fail('بيانات الاسترداد غير صحيحة',401);
+  const oldHash=await keyed(env,'customer-recovery-v1:'+b.recovery_code),c=await env.DB.prepare('SELECT id FROM customers WHERE username=? AND recovery_hash=? AND blocked=0').bind(user,oldHash).first();if(!c)fail('بيانات الاسترداد غير صحيحة',401);
   const recovery=random(),newHash=await keyed(env,'customer-recovery-v1:'+recovery),passHash=await customerPasswordHash(env,pass);
   const result=await env.DB.batch([env.DB.prepare('UPDATE customers SET password_hash=?,recovery_hash=?,auth_version=auth_version+1,updated_at=? WHERE id=? AND recovery_hash=?').bind(passHash,newHash,now(),c.id,oldHash),env.DB.prepare('DELETE FROM customer_sessions WHERE customer_id=? AND EXISTS(SELECT 1 FROM customers WHERE id=? AND recovery_hash=?)').bind(c.id,c.id,newHash)]);
   if(!result[0].meta.changes)fail('استُخدم رمز الاسترداد بالفعل، استخدم الرمز الأحدث',409);

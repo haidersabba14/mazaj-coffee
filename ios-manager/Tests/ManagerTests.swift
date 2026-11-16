@@ -32,3 +32,15 @@ extension ManagerTests{
         XCTAssertLessThanOrEqual(max(decoded.size.width,decoded.size.height),1000)
     }
 }
+extension ManagerTests {
+    func testCustomerDirectoryDecodesOptionalHistoryAndCard() throws {
+        let json = Data(#"{"customers":[{"id":"c1","username":"coffee_guest","name":"عميل","phone":"","blocked":1,"created_at":1794840000,"order_count":0,"last_order_at":null,"card_number":null}],"has_more":true,"offset":50}"#.utf8)
+        let reply = try JSONDecoder().decode(CustomersReply.self, from: json)
+        XCTAssertEqual(reply.offset, 50)
+        XCTAssertTrue(reply.has_more)
+        XCTAssertEqual(reply.customers.count, 1)
+        XCTAssertTrue(reply.customers[0].isBlocked)
+        XCTAssertNil(reply.customers[0].last_order_at)
+        XCTAssertNil(reply.customers[0].card_number)
+    }
+}

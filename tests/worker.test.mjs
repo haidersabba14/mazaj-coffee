@@ -249,3 +249,50 @@ test('تقييم حقيقي بعد التسليم فقط؛ الملكية وال
  const publicProducts=await(await request('catalog')).json();const drink=publicProducts.products.find(p=>p.id==='cappuccino');assert.ok(drink.rating_count>=1);assert.ok(drink.rating_average>=1);assert.equal('customer_id' in drink,false);assert.equal('order_id' in drink,false);
  await db.prepare('DELETE FROM orders WHERE id=?').bind(o.id).run();assert.equal((await db.prepare('SELECT COUNT(*) n FROM drink_ratings WHERE order_id=?').bind(o.id).first()).n,0);
 });
+
+test('المفضلة والتخصيص محفوظة بالحساب ومعزولة ومحمية من تعارض الأجهزة',async()=>{
+ const a=await newCustomer(),b=await newCustomer();assert.equal((await request('customer/preferences')).status,401);
+ const prefs=await(await customerRequest('customer/preferences',undefined,a.cookie)).json();assert.equal(prefs.version,0);
+ const payload={customer_id:a.user.id,version:0,favorites:['tea','iced-latte'],customization:{milk:'whole',size:'small',sugar:'light'}};
+ assert.equal((await customerRequest('customer/preferences',payload,a.cookie)).status,200);
+ const saved=await(await customerRequest('customer/preferences',undefined,a.cookie)).json();assert.deepEqual(saved.favorites,payload.favorites);assert.equal(saved.customization.size,'small');assert.equal(saved.version,1);
+ assert.deepEqual((await(await customerRequest('customer/preferences',undefined,b.cookie)).json()).favorites,[]);
+ assert.equal((await customerRequest('customer/preferences',payload,a.cookie)).status,409);
+ assert.equal((await customerRequest('customer/preferences',{...payload,version:1,customization:{milk:'oat'}},a.cookie)).status,400);
+ assert.equal((await customerRequest('customer/preferences',{...payload,version:1,favorites:['missing']},a.cookie)).status,400);
+ const results=await Promise.all([1,2].map(()=>customerRequest('customer/preferences',{...payload,version:1},a.cookie)));assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+});
+test('الولاء المرتبط يفتح من حساب آخر الجهاز ولا يُربط برقم الهاتف أو QR العام',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),id=crypto.randomUUID(),key=token();
+ const c=await(await customerRequest('customer/loyalty-create',{id,token:key,name:'بطاقة العميل',contact:'33333333'},a.cookie)).json();assert.equal(c.card.id,id);assert.equal(c.card.account_linked,true);assert.equal(c.card.token,undefined);
+ const again=await(await customerRequest('customer/loyalty-create',{id:crypto.randomUUID(),token:token(),name:'أخرى',contact:'33333333'},a.cookie)).json();assert.equal(again.card.id,id);assert.equal(again.created,false);
+ assert.equal((await(await customerRequest('customer/loyalty',undefined,b.cookie)).json()).card,null);
+ assert.equal((await customerRequest('customer/loyalty-link',{id,token:key},b.cookie)).status,404);
+ assert.equal((await customerRequest('customer/loyalty-link',{id,token:token()},a.cookie)).status,404);
+ const session=await customerRequest('customer/login',{username:a.user.username,password:customerPassword}),fresh=session.headers.get('set-cookie').split(';')[0];assert.equal((await(await customerRequest('customer/loyalty',undefined,fresh)).json()).card.id,id);
+ // Existing guest cards need the private capability, never a public 7-digit card number.
+ const guest={id:crypto.randomUUID(),token:token(),name:'ضيف',contact:'33333333'};await request('cards',guest);assert.equal((await customerRequest('customer/loyalty-link',{id:guest.id,token:guest.token},b.cookie)).status,200);
+ await db.prepare('UPDATE loyalty_cards SET reward_drinks=2 WHERE id=?').bind(id).run();const o=order();o.items=[{id:'tea',quantity:2}];o.reward_card={account:true};const ordered=await customerRequest('orders',o,a.cookie);assert.equal(ordered.status,201,await ordered.clone().text());assert.equal((await db.prepare('SELECT reward_drinks FROM loyalty_cards WHERE id=?').bind(id).first()).reward_drinks,0);
+ const version=(await db.prepare('SELECT version FROM orders WHERE id=?').bind(o.id).first()).version;assert.equal((await customerRequest('order/cancel',{id:o.id,version},a.cookie)).status,200);assert.equal((await db.prepare('SELECT reward_drinks FROM loyalty_cards WHERE id=?').bind(id).first()).reward_drinks,2);assert.equal((await customerRequest('order/cancel',{id:o.id,version},a.cookie)).status,409);assert.equal((await db.prepare('SELECT reward_drinks FROM loyalty_cards WHERE id=?').bind(id).first()).reward_drinks,2);
+});
+test('تعديل وإلغاء الزبون قبل القبول فقط، واسترداد المخزون وتعارض الموظف محفوظة',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();o.items=[{id:'tea',quantity:1}];await db.prepare("UPDATE products SET stock=3 WHERE id='tea'").run();await customerRequest('orders',o,a.cookie);const v=(await db.prepare('SELECT version FROM orders WHERE id=?').bind(o.id).first()).version;
+ const edit={id:o.id,version:v,notes:'ملاحظات جديدة <img src=x>',customization:{size:'small',milk:'whole',sugar:'normal'}};
+ assert.equal((await customerRequest('order/edit',edit,b.cookie)).status,404);assert.equal((await customerRequest('order/edit',{...edit,customization:{size:'large'}},a.cookie)).status,400);assert.equal((await customerRequest('order/edit',{...edit,customization:{sugar:'none'}},a.cookie)).status,400);
+ assert.equal((await customerRequest('order/edit',edit,a.cookie)).status,200);assert.equal((await customerRequest('order/edit',edit,a.cookie)).status,409);const edited=await db.prepare('SELECT * FROM orders WHERE id=?').bind(o.id).first();assert.equal(edited.notes,edit.notes);assert.equal(JSON.parse(edited.customization).size,'small');assert.equal(edited.total,0);
+ await loginOwner();const raced=await Promise.all([customerRequest('order/cancel',{id:o.id,version:edited.version},a.cookie),request('admin/status',{id:o.id,status:'accepted',version:edited.version},true)]);assert.deepEqual(raced.map(r=>r.status).sort(),[200,409]);
+ const final=await db.prepare('SELECT status FROM orders WHERE id=?').bind(o.id).first();const stock=(await db.prepare("SELECT stock FROM products WHERE id='tea'").first()).stock;assert.equal(stock,final.status==='cancelled'?3:2);
+ if(final.status==='accepted')assert.equal((await customerRequest('order/cancel',{id:o.id,version:edited.version+1},a.cookie)).status,409);
+ await db.prepare("UPDATE products SET stock=-1 WHERE id='tea'").run();
+});
+test('الفاتورة خاصة بالطلب ولا تكشف هاتفًا أو موقعًا أو رمز متابعة',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);
+ assert.equal((await request('order/invoice',{id:o.id})).status,404);assert.equal((await customerRequest('order/invoice',{id:o.id},b.cookie)).status,404);
+ const invoice=(await(await request('order/invoice',{id:o.id,token:o.token})).json()).invoice;assert.match(invoice.number,/^INV-\d+$/);assert.equal(invoice.total,0);assert.equal(invoice.delivery_fee,0);for(const field of ['phone','location_lat','token','token_hash','customer_id'])assert.equal(invoice[field],undefined);assert.equal((await customerRequest('order/invoice',{id:o.id},a.cookie)).status,200);
+});
+test('إدارة العملاء للمالك فقط وحظر الحساب يلغي الجلسات دون حذف الطلبات',async()=>{
+ const a=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);assert.equal((await customerRequest('admin/customers',undefined,a.cookie)).status,401);await loginOwner();
+ const list=await(await request('admin/customers?q='+encodeURIComponent(a.user.username),undefined,true)).json();assert.equal(list.customers.length,1);const c=list.customers[0];assert.equal(c.order_count,1);for(const key of ['password_hash','recovery_hash','session_hash'])assert.equal(c[key],undefined);
+ assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:true},true)).status,200);assert.equal((await customerRequest('customer/me',undefined,a.cookie)).status,401);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,401);assert.ok(await db.prepare('SELECT id FROM orders WHERE id=?').bind(o.id).first());assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:false},true)).status,200);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,200);
+ const staffId=crypto.randomUUID();await db.prepare("INSERT INTO staff VALUES(?,?,?,?,'staff',1,?)").bind(staffId,'suite_staff','موظف','unused',Date.now()/1000).run();const key=token();await db.prepare('INSERT INTO sessions(token_hash,created_at,expires,user_id,device_name) VALUES(?,?,?,?,?)').bind(await hash(key),1,Math.floor(Date.now()/1000)+3600,staffId,'test').run();assert.equal((await customerRequest('admin/customers',undefined,'session='+key)).status,403);
+});

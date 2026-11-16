@@ -1,0 +1,17 @@
+(()=>{
+ let user=null,version=0,epoch=0,loaded=false,saving=false,dirty=false,timer=null;
+ const $=s=>document.querySelector(s);
+ async function api(path,data){const r=await fetch('/api/'+path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined,...(path==='customer/preferences'&&data?{keepalive:true}:{})}),b=await r.json();if(!r.ok)throw Object.assign(Error(b.error||'تعذر الاتصال'),{status:r.status});return b;}
+ function status(message){if($('#welcome-sync'))$('#welcome-sync').textContent=message;window.mazajI18n?.apply();}
+ async function save(){if(!user||!loaded||saving||!dirty)return;saving=true;dirty=false;let failed=false;const identity=user.id,generation=epoch,snapshot=window.royalPreferences();try{const r=await api('customer/preferences',{...snapshot,customer_id:identity,version});if(epoch!==generation)return;version=r.version;status('تمت مزامنة مفضلتك وتفضيلاتك');}catch(err){failed=true;if(epoch!==generation)return;status(err.message);if(err.status===409){const r=await api('customer/preferences');if(epoch===generation&&r.customer_id===user?.id){version=r.version;window.royalApplyPreferences(r);dirty=false;}}else if(err.status!==401)dirty=true;}finally{saving=false;if(dirty&&!failed&&user&&loaded)clearTimeout(timer),timer=setTimeout(save,350);}}
+ async function change(value){if(!window.royalApplyPreferences)return;if(user?.id===value?.id&&loaded)return;const hadUser=!!user;epoch++;const generation=epoch;user=value;loaded=false;dirty=false;clearTimeout(timer);$('#customer-welcome').hidden=!user;
+  if(!user){if(hadUser)window.royalApplyPreferences({favorites:[],customization:{}});window.royalAccountLoyalty=null;window.royalAccountReward=false;return;}
+  $('#welcome-name').textContent=user.name;status('جارٍ تحميل تفضيلاتك…');try{const prefs=await api('customer/preferences');if(epoch!==generation||prefs.customer_id!==user?.id)return;version=prefs.version;window.royalApplyPreferences(prefs);loaded=true;status('مفضلتك وتفضيلاتك معك على كل أجهزتك.');const {card}=await api('customer/loyalty');if(epoch!==generation)return;window.royalAccountLoyalty=card;
+   const params=new URLSearchParams(location.search);if(params.get('reward')==='1'&&card?.reward_drinks>=2)window.royalStartAccountReward();
+   if(params.has('reorder')){const id=params.get('reorder');const {orders}=await api('customer/orders');if(epoch!==generation)return;const o=orders.find(x=>x.id===id);if(o)await window.royalReorder(o);else status('الطلب السابق غير موجود في حسابك');const url=new URL(location.href);url.searchParams.delete('reorder');history.replaceState(null,'',url.pathname+url.search+url.hash);}
+  }catch(err){if(epoch===generation)status(err.message);}
+ }
+ window.addEventListener('royal-customer-change',ev=>void change(ev.detail));window.addEventListener('royal-preferences-changed',()=>{if(user&&loaded){dirty=true;clearTimeout(timer);timer=setTimeout(save,350);}});window.addEventListener('online',()=>{if(dirty)void save();});
+ async function init(){if(window.royalCurrentCustomer!==undefined)await change(window.royalCurrentCustomer);}
+ window.addEventListener('royal-suite-ready',()=>void init());if(window.royalApplyPreferences)void init();
+})();
