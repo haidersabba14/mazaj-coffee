@@ -170,3 +170,7 @@ test('التخصيص يرفض إدخال CSS وترتيبًا مكررًا وي�
  const settings={theme:'system',accent:'#112233',background:'coffee',font:'rounded',icons:'filled',sections:['products','orders','management'],shortcuts:['ready','accepted'],metrics:['weekly','daily'],sound:false,volume:.25};assert.equal((await request('admin/preferences',{settings},true)).status,200);assert.deepEqual((await(await request('admin/preferences',undefined,true)).json()).settings,settings);
  const archived=await(await request('admin/archives',undefined,true)).json();if(archived.orders.length){const id=archived.orders[0].id;assert.equal((await request('admin/archive',{id,archived:false},true)).status,200);assert.ok(!(await(await request('admin/archives',undefined,true)).json()).orders.some(o=>o.id===id));}
 });
+test('حد مكتبة الصور ذري عند رفعين متزامنين',async()=>{
+ await loginOwner();await db.batch(Array.from({length:99},(_,n)=>db.prepare('INSERT INTO product_images VALUES(?,?,?,?,?,?)').bind('quota-'+n,'image/png',new Uint8Array([1]).buffer,1,1,'owner')));
+ try{const bytes=await readFile('public/images/icon-192.png'),upload=()=>mf.dispatchFetch(origin+'/api/admin/images',{method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'image/png'},body:bytes});const r=await Promise.all([upload(),upload()]);assert.equal(r.filter(r=>r.status===201).length,1);assert.equal(r.filter(r=>r.status===409).length,1);assert.equal((await db.prepare('SELECT COUNT(*) n FROM product_images').first()).n,100);}finally{await db.prepare('DELETE FROM product_images').run();}
+});
