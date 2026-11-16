@@ -13,3 +13,11 @@ extension ManagerTests{
         let encoded=try JSONEncoder().encode(p);let restored=try JSONDecoder().decode(RoyalPreferences.self,from:encoded);XCTAssertEqual(restored.icons,"filled")
     }
 }
+extension ManagerTests{
+    func testCustomerCallAndCancellationFollowShortcutOrder(){
+        var p=RoyalPreferences();p.shortcuts=["call","cancelled","delivered"]
+        XCTAssertEqual(p.actions(for:"ready"),["call","cancelled","delivered"])
+        XCTAssertTrue(p.actions(for:"delivered").isEmpty)
+        XCTAssertTrue(p.actions(for:"cancelled").isEmpty)
+    }
+}

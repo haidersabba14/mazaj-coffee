@@ -30,6 +30,11 @@ struct RoyalPreferences: Codable {
     var background = "forest"; var font = "system"; var icons = "outline"
     var sections = ["orders","loyalty","products","management"]; var shortcuts = ["accepted","preparing","ready","delivered","cancelled","call"]; var metrics = ["daily","ready"]
     enum CodingKeys: String, CodingKey { case theme,accent,cards,view,tone,sound,vibration,volume,background,font,icons,sections,shortcuts,metrics }
+    func actions(for status:String)->[String]{
+        var values=Stage(rawValue:status)?.next.map(\.rawValue) ?? []
+        if status=="ready" {values.append("call")}
+        return values.sorted{(shortcuts.firstIndex(of:$0) ?? 99)<(shortcuts.firstIndex(of:$1) ?? 99)}
+    }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
