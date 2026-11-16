@@ -5,7 +5,7 @@ on:
       tag:
         description: Existing Coffee Royal release tag
         required: true
-        default: royal-manager-v3.1.1-5
+        default: royal-manager-v3.2.0-6
 permissions:
   contents: write
 jobs:
