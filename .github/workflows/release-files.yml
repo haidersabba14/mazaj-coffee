@@ -23,4 +23,4 @@ jobs:
           gh release view "$RELEASE_TAG"
           git archive --format=zip --output="$RUNNER_TEMP/coffee-royal-source.zip" HEAD
       - name: Attach source, feature register and test report
-        run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/coffee-royal-source.zip" docs/TEST-REPORT.md docs/FEATURES-2331.md docs/RELEASE-3.3.md docs/REQUESTED-FEATURES.md --clobber
+        run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/coffee-royal-source.zip" docs/TEST-REPORT.md docs/FEATURES-2331.md docs/RELEASE-3.3.md docs/REQUESTED-FEATURES.md docs/LANGUAGE-SUPPORT.md --clobber

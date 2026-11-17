@@ -28,18 +28,28 @@ export async function engagementRoutes(req,env,h){
   }
  }
  if(p==='/api/assistant'&&m==='POST'){
-  await rate(env,'assistant:'+(req.headers.get('CF-Connecting-IP')||'local'),25,600);const b=await read(req,h),q=text(b.question,1,300).toLowerCase().normalize('NFKD').replace(/[\u064b-\u065f]/g,'').replace(/[أإآ]/g,'ا');let reply;
+  await rate(env,'assistant:'+(req.headers.get('CF-Connecting-IP')||'local'),25,600);const b=await read(req,h),q=text(b.question,1,300).toLowerCase().normalize('NFKD').replace(/[\u064b-\u065f]/g,'').replace(/[أإآ]/g,'ا');if(b.lang!==undefined&&!['ar','en'].includes(b.lang))fail('اللغة غير مدعومة');let ar,en;
   if(/طلب|order|جاهز|ready/.test(q)&&/حاله|حالة|وين|متابع|status|where|جاهز|ready/.test(q)){
    const o=b.context?await authorizedCustomerOrder(env,customer,b.context.id,b.context.token,fail):customer?await env.DB.prepare('SELECT * FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 1').bind(customer.id).first():null;
-   reply=o?'طلبك CR-'+o.order_number+': '+statusTitles[o.status]+(o.estimated_ready_at?'، الوقت المتوقع '+new Date(o.estimated_ready_at*1000).toLocaleTimeString('ar-BH',{timeZone:'Asia/Bahrain',hour:'2-digit',minute:'2-digit'}):''):'افتح متابعة الطلب برقم الطلب ورمزك الخاص، أو سجّل دخول الحساب المرتبط. لا نعرض طلبًا من رقم الهاتف فقط.';
-  }else if(/مجان|سعر|فلوس|price|free|cost/.test(q)){const s=await env.DB.prepare('SELECT all_free FROM settings WHERE id=1').first();reply=s.all_free?'كل المشروبات مجانية، والتوصيل بدون رسوم. مشروب واحد لكل طلب، ومشروبان لمكافأة الولاء.':'راجع السعر الحالي في ملخص الطلب قبل التأكيد.';}
-  else if(/ساع|وقت|متى|فتح|hours|open|schedule/.test(q)){const s=await env.DB.prepare('SELECT opening_hour,closing_hour,accepting,maintenance FROM settings WHERE id=1').first();reply='الساعات العامة '+s.opening_hour+':00 إلى '+s.closing_hour+':00 بتوقيت البحرين. قد تختلف أيام الفروع؛ المواعيد المتاحة تظهر في السلة.'+(!s.accepting||s.maintenance?' استقبال الطلبات متوقف حاليًا.':'');}
-  else if(/ولاء|ختم|مكاف|loyal|stamp/.test(q))reply='كل خمس ختمات من الإدارة تعطيك مشروبين من اختيارك. افتح بطاقتك واعرض QR للمسؤول. المستويات والنقاط معنوية ولا تمنح ختمات من المتصفح.';
-  else if(/توصيل|سياره|سيارة|delivery|pickup|car/.test(q))reply='اختر استلامًا من المقهى، توصيلًا مجانيًا مع تحديد البيت، أو استلامًا من السيارة مع وصفها. لطلب السيارة المقبول يظهر زر «وصلت للمقهى».';
-  else if(/حليب|سكر|حجم|milk|sugar|size/.test(q))reply='الحليب كامل الدسم فقط، والحجم صغير أو وسط. السكر على ذوقك باستثناء الشاي والقهوة العربية: سكر عادي فقط.';
-  else if(/الغ|عدل|edit|cancel/.test(q))reply='قبل قبول المقهى يمكنك تعديل الملاحظات وخيارات المشروب أو إلغاء الطلب من صفحة متابعته. بعد القبول تتولى الإدارة الإجراء.';
-  else reply='أقدر أساعدك في ساعات العمل والأسعار والولاء والتوصيل وخيارات المشروب وحالة طلبك. هذا مساعد إرشادي بقواعد محددة، ولا ينفّذ طلبًا بدل تأكيدك.';
-  return json({reply,kind:'guided-help'});
+   const englishStatus={new:'Awaiting cafe acceptance',accepted:'Accepted',preparing:'Preparing',ready:o?.fulfillment==='delivery'?'Ready for delivery':'Ready to collect',delivered:'Delivered',cancelled:'Cancelled'};
+   ar=o?'طلبك CR-'+o.order_number+': '+statusTitles[o.status]+(o.estimated_ready_at?'، الوقت المتوقع '+new Date(o.estimated_ready_at*1000).toLocaleTimeString('ar-BH',{timeZone:'Asia/Bahrain',hour:'2-digit',minute:'2-digit'}):''):'افتح متابعة الطلب برقم الطلب ورمزك الخاص، أو سجّل دخول الحساب المرتبط. لا نعرض طلبًا من رقم الهاتف فقط.';
+   en=o?'Your order CR-'+o.order_number+': '+englishStatus[o.status]+(o.estimated_ready_at?'. Estimated time: '+new Date(o.estimated_ready_at*1000).toLocaleTimeString('en-BH',{timeZone:'Asia/Bahrain',hour:'2-digit',minute:'2-digit'}):''):'Open order tracking with your order number and private code, or sign in to the linked account. We never show an order using a phone number alone.';
+  }else if(/مجان|سعر|فلوس|price|free|cost/.test(q)){
+   const s=await env.DB.prepare('SELECT all_free FROM settings WHERE id=1').first();ar=s.all_free?'كل المشروبات مجانية، والتوصيل بدون رسوم. مشروب واحد لكل طلب، ومشروبان لمكافأة الولاء.':'راجع السعر الحالي في ملخص الطلب قبل التأكيد.';en=s.all_free?'Every drink is free, with no delivery fees. One drink per order, or two when redeeming a loyalty reward.':'Check the current price in the order summary before confirming.';
+  }else if(/ساع|وقت|متى|فتح|hours|open|schedule/.test(q)){
+   const s=await env.DB.prepare('SELECT opening_hour,closing_hour,accepting,maintenance FROM settings WHERE id=1').first();ar='الساعات العامة '+s.opening_hour+':00 إلى '+s.closing_hour+':00 بتوقيت البحرين. قد تختلف أيام الفروع؛ المواعيد المتاحة تظهر في السلة.'+(!s.accepting||s.maintenance?' استقبال الطلبات متوقف حاليًا.':'');en='General opening hours: '+s.opening_hour+':00 to '+s.closing_hour+':00, Bahrain time. Branch days may differ; available scheduled times appear in the cart.'+(!s.accepting||s.maintenance?' Order reception is currently paused.':'');
+  }else if(/ولاء|ختم|مكاف|loyal|stamp/.test(q)){
+   ar='كل خمس ختمات من الإدارة تعطيك مشروبين من اختيارك. افتح بطاقتك واعرض QR للمسؤول. المستويات والنقاط معنوية ولا تمنح ختمات من المتصفح.';en='Five staff-issued stamps earn two drinks of your choice. Open your card and show its QR code to staff. Levels and points are symbolic and never add stamps from the browser.';
+  }else if(/توصيل|سياره|سيارة|delivery|pickup|car/.test(q)){
+   ar='اختر استلامًا من المقهى، توصيلًا مجانيًا مع تحديد البيت، أو استلامًا من السيارة مع وصفها. لطلب السيارة المقبول يظهر زر «وصلت للمقهى».';en='Choose cafe pickup, free home delivery with a map location, or curbside pickup with a car description. Accepted curbside orders show an “I’ve arrived” button.';
+  }else if(/حليب|سكر|حجم|milk|sugar|size/.test(q)){
+   ar='الحليب كامل الدسم فقط، والحجم صغير أو وسط. السكر على ذوقك باستثناء الشاي والقهوة العربية: سكر عادي فقط.';en='Whole milk only, in small or medium cups. Choose your sugar, except for tea and Arabic coffee, which use regular sugar only.';
+  }else if(/الغ|عدل|edit|cancel/.test(q)){
+   ar='قبل قبول المقهى يمكنك تعديل الملاحظات وخيارات المشروب أو إلغاء الطلب من صفحة متابعته. بعد القبول تتولى الإدارة الإجراء.';en='Before cafe acceptance, you can edit notes and drink options or cancel from order tracking. After acceptance, staff handle changes.';
+  }else{
+   ar='أقدر أساعدك في ساعات العمل والأسعار والولاء والتوصيل وخيارات المشروب وحالة طلبك. هذا مساعد إرشادي بقواعد محددة، ولا ينفّذ طلبًا بدل تأكيدك.';en='I can help with opening hours, prices, loyalty, collection, drink options and your order status. This is a guide using fixed rules. It never places an order without your confirmation.';
+  }
+  return json({reply:b.lang==='en'?en:ar,translations:{ar,en},kind:'guided-help'});
  }
  return null;
 }
