@@ -1,0 +1,15 @@
+ALTER TABLE settings ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE restore_sessions(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,session_hash TEXT NOT NULL,plan TEXT NOT NULL,base_revision INTEGER NOT NULL,expires INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0,claim TEXT NOT NULL DEFAULT '');
+CREATE TRIGGER restore_commit_guard BEFORE UPDATE OF used ON restore_sessions WHEN NEW.used=1 AND OLD.used=0 BEGIN SELECT CASE WHEN OLD.expires<CAST(strftime('%s','now') AS INTEGER) THEN RAISE(ABORT,'restore_expired') END; SELECT CASE WHEN EXISTS(SELECT 1 FROM orders WHERE status IN('new','accepted','preparing','ready')) THEN RAISE(ABORT,'restore_busy') END; SELECT CASE WHEN (SELECT config_revision FROM settings WHERE id=1)!=OLD.base_revision THEN RAISE(ABORT,'restore_stale') END; END;
+CREATE TRIGGER revision_product_insert AFTER INSERT ON products BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_product_update AFTER UPDATE ON products BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_ingredient_insert AFTER INSERT ON ingredients BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_ingredient_update AFTER UPDATE ON ingredients BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_recipe_insert AFTER INSERT ON recipes BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_recipe_update AFTER UPDATE ON recipes BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_recipe_delete AFTER DELETE ON recipes BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_branch_insert AFTER INSERT ON branches BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_branch_update AFTER UPDATE ON branches BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_hours_insert AFTER INSERT ON branch_hours BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_hours_update AFTER UPDATE ON branch_hours BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;
+CREATE TRIGGER revision_shop_update AFTER UPDATE OF accepting,opening_hour,closing_hour,capacity,slot_capacity,schedule_days,brand_name,maintenance,busy_mode,auto_accept ON settings BEGIN UPDATE settings SET config_revision=config_revision+1 WHERE id=1; END;

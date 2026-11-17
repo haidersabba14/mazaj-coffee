@@ -296,3 +296,126 @@ test('إدارة العملاء للمالك فقط وحظر الحساب يلغ
  assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:true},true)).status,200);assert.equal((await customerRequest('customer/me',undefined,a.cookie)).status,401);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,401);assert.ok(await db.prepare('SELECT id FROM orders WHERE id=?').bind(o.id).first());assert.equal((await request('admin/customer-block',{id:a.user.id,blocked:false},true)).status,200);assert.equal((await customerRequest('customer/login',{username:a.user.username,password:customerPassword})).status,200);
  const staffId=crypto.randomUUID();await db.prepare("INSERT INTO staff VALUES(?,?,?,?,'staff',1,?)").bind(staffId,'suite_staff','موظف','unused',Date.now()/1000).run();const key=token();await db.prepare('INSERT INTO sessions(token_hash,created_at,expires,user_id,device_name) VALUES(?,?,?,?,?)').bind(await hash(key),1,Math.floor(Date.now()/1000)+3600,staffId,'test').run();assert.equal((await customerRequest('admin/customers',undefined,'session='+key)).status,403);
 });
+
+test('جدولة حقيقية وموعد تحضير محمي وسعة ذرية وإرجاع الموعد بعد الإلغاء',async()=>{
+ await db.prepare('UPDATE settings SET opening_hour=0,closing_hour=24,capacity=200,slot_capacity=1,schedule_days=7').run();await db.prepare("UPDATE branches SET opening_hour=0,closing_hour=24 WHERE id='main'").run();
+ const slots=await(await request('availability')).json();assert.ok(slots.slots.length);const scheduled=slots.slots[0].at,a={...order(),scheduled_at:scheduled},b={...order(),scheduled_at:scheduled};
+ const results=await Promise.all([request('orders',a),request('orders',b)]);assert.deepEqual(results.map(r=>r.status).sort(),[201,409]);const winner=results[0].status===201?a:b;const saved=await db.prepare('SELECT * FROM orders WHERE id=?').bind(winner.id).first();assert.equal(saved.scheduled_at,scheduled);assert.equal(saved.preparation_due_at,scheduled-600);
+ await loginOwner();assert.equal((await request('admin/status',{id:winner.id,status:'accepted',version:saved.version},true)).status,200);const accepted=await db.prepare('SELECT * FROM orders WHERE id=?').bind(winner.id).first();assert.equal(accepted.estimated_ready_at,scheduled);assert.equal((await request('admin/status',{id:winner.id,status:'preparing',version:accepted.version},true)).status,409);
+ assert.equal((await request('admin/status',{id:winner.id,status:'cancelled',version:accepted.version,reason:'اختبار'},true)).status,200);const slotsAfter=(await(await request('availability')).json()).slots;assert.ok(slotsAfter.some(x=>x.at===scheduled));
+ assert.equal((await request('orders',{...order(),scheduled_at:scheduled+1})).status,400);assert.equal((await request('orders',{...order(),scheduled_at:Math.floor(Date.now()/1000)-900})).status,400);
+ await db.prepare('UPDATE settings SET slot_capacity=8').run();
+});
+test('ساعات أسبوعية للفرع والموسمية تطبق على القائمة وعلى تأكيد الطلب',async()=>{
+ await loginOwner();const weekday=new Date(Date.now()+10800000).getUTCDay();const days=Array.from({length:7},(_,weekday)=>({weekday,opening_minute:0,closing_minute:1440,closed:false}));days[weekday].closed=true;
+ assert.equal((await request('admin/branch-hours',{branch_id:'main',days},true)).status,200);assert.equal((await request('orders',order())).status,409);assert.equal((await(await request('availability')).json()).now_open,false);
+ days[weekday].closed=false;assert.equal((await request('admin/branch-hours',{branch_id:'main',days},true)).status,200);
+ const after=Math.floor(Date.now()/1000)+86400;assert.equal((await request('admin/product-season',{id:'secret',available_from:after,available_until:after+86400,featured:true,seasonal_label:'شتوي',prep_minutes:20},true)).status,200);
+ assert.equal((await(await request('catalog')).json()).products.some(p=>p.id==='secret'),false);assert.equal((await request('orders',{...order(),items:[{id:'secret',quantity:1}]})).status,400);
+ assert.equal((await request('admin/product-season',{id:'secret',available_from:null,available_until:null,featured:true,seasonal_label:'توقيع المقهى',prep_minutes:20},true)).status,200);const secret=(await(await request('catalog')).json()).products.find(p=>p.id==='secret');assert.equal(secret.featured,1);assert.equal(secret.prep_minutes,20);
+ assert.equal((await request('admin/schedule-settings',{slot_capacity:0,schedule_days:8},true)).status,400);
+ await db.prepare("UPDATE products SET featured=0,seasonal_label='',prep_minutes=10 WHERE id='secret'").run();await db.prepare("DELETE FROM branch_hours WHERE branch_id='main'").run();
+});
+test('الاستلام من السيارة يحتاج وصفًا ويؤكد الوصول بعد القبول دون تسريب أو تكرار',async()=>{
+ const o={...order(),fulfillment:'curbside',car_description:'سيارة بيضاء عند المقهى'};assert.equal((await request('orders',{...o,car_description:''})).status,400);assert.equal((await request('orders',o)).status,201);
+ assert.equal((await request('order/arrived',{id:o.id,token:o.token})).status,409);assert.equal((await request('order/arrived',{id:o.id,token:token()})).status,404);
+ await loginOwner();const row=await db.prepare('SELECT * FROM orders WHERE id=?').bind(o.id).first();await request('admin/status',{id:o.id,status:'accepted',version:row.version},true);
+ const [a,b]=await Promise.all([request('order/arrived',{id:o.id,token:o.token}),request('order/arrived',{id:o.id,token:o.token})]);assert.equal(a.status,200);assert.equal(b.status,200);assert.equal((await a.json()).arrived_at,(await b.json()).arrived_at);
+ const tracked=await(await request('track',{id:o.id,token:o.token})).json();assert.ok(tracked.arrived_at);assert.equal(tracked.car_description,o.car_description);assert.ok(tracked.events.some(e=>e.kind==='arrived'));assert.equal((await db.prepare("SELECT COUNT(*) n FROM order_events WHERE order_id=? AND kind='arrived'").bind(o.id).first()).n,1);
+});
+
+test('تنبيهات الحساب وتاريخ الحالات خاصة، والقراءة لا تخفي تنبيهًا جديدًا',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);const activity=(await(await customerRequest('customer/activity',undefined,a.cookie)).json());assert.ok(activity.unread>=1);assert.equal(activity.events[0].order_id,o.id);assert.equal((await(await customerRequest('customer/activity',undefined,b.cookie)).json()).events.length,0);
+ const latest=activity.events[0].seq;assert.equal((await customerRequest('customer/activity-read',{through_seq:latest},a.cookie)).status,200);assert.equal((await(await customerRequest('customer/activity',undefined,a.cookie)).json()).unread,0);
+ await loginOwner();await request('admin/message',{id:o.id,message:'رسالة للطلب <img src=x>'},true);const next=(await(await customerRequest('customer/activity',undefined,a.cookie)).json());assert.equal(next.unread,1);assert.equal(next.events[0].kind,'message');assert.match(next.events[0].message,/<img/);assert.equal((await customerRequest('customer/activity-read',{through_seq:next.events[0].seq+100},a.cookie)).status,400);
+ const tracked=(await(await customerRequest('track',{id:o.id},a.cookie)).json());assert.ok(tracked.events.length>=2);assert.equal(tracked.events[0].user_id,undefined);
+});
+test('نقاط التجربة والشارات تعتمد على تسليم حقيقي ولا تمنح ختمات من المتصفح',async()=>{
+ const a=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);let club=(await(await customerRequest('customer/club',undefined,a.cookie)).json());assert.equal(club.points,0);assert.equal(club.badges.some(b=>b.earned),false);
+ await loginOwner();for(const status of ['accepted','preparing','ready','delivered'])assert.equal((await request('admin/status',{id:o.id,status},true)).status,200);
+ club=(await(await customerRequest('customer/club',undefined,a.cookie)).json());assert.equal(club.points,20);assert.equal(club.delivered_orders,1);assert.equal(club.cups,1);assert.equal(club.badges.find(b=>b.key==='first').earned,true);assert.equal(club.missions[0].completed,true);
+ await request('admin/status',{id:o.id,status:'delivered'},true);assert.equal((await(await customerRequest('customer/club',undefined,a.cookie)).json()).points,20);
+ const suggestion=(await(await customerRequest('customer/suggestions',undefined,a.cookie)).json());assert.equal(suggestion.suggestions.length,3);assert.equal((await request('customer/club')).status,401);
+});
+test('المساعد إرشادي ولا يكشف طلبًا من رقم أو سياق شخص آخر',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o=order();await customerRequest('orders',o,a.cookie);const no=(await(await request('assistant',{question:'وين حالة طلبي؟'})).json()).reply;assert.match(no,/رمزك الخاص/);
+ const own=(await(await customerRequest('assistant',{question:'وين حالة طلبي؟'},a.cookie)).json()).reply;assert.match(own,/CR-/);const notOwn=(await(await customerRequest('assistant',{question:'وين حالة طلبي؟'},b.cookie)).json()).reply;assert.doesNotMatch(notOwn,/CR-/);
+ const wrong=await customerRequest('assistant',{question:'حالة الطلب',context:{id:o.id,token:token()}},b.cookie);assert.equal(wrong.status,200);assert.doesNotMatch((await wrong.json()).reply,/CR-/);assert.match((await(await request('assistant',{question:'كم سعر القهوة؟'})).json()).reply,/مجانية/);
+});
+
+test('المصادقة الثنائية تحقق RFC6238 وتشفّر السر وتمنع إعادة استخدام الرموز',async()=>{
+ const {base32,totpCode}=await import('../src/mfa.js');const secret=base32(new TextEncoder().encode('12345678901234567890'));assert.equal(await totpCode(secret,59,8),'94287082');assert.equal(await totpCode(secret,1111111109,8),'07081804');
+ await loginOwner();assert.equal((await(await request('admin/mfa',undefined,true)).json()).enabled,false);assert.equal((await request('admin/mfa/setup',{password:'wrong'},true)).status,401);
+ const setup=await request('admin/mfa/setup',{password},true);assert.equal(setup.status,200);const init=await setup.json();assert.match(init.uri,/^otpauth:/);const row=await db.prepare("SELECT * FROM admin_second_factors WHERE user_id='owner'").first();assert.notEqual(row.pending_secret,init.secret);assert.equal(row.pending_secret.includes(init.secret),false);
+ assert.equal((await request('admin/mfa/confirm',{password,otp:'abcdef'},true)).status,401);
+ const confirm=await request('admin/mfa/confirm',{password,otp:await totpCode(init.secret)},true);assert.equal(confirm.status,200,await confirm.clone().text());const codes=(await confirm.json()).backup_codes;assert.equal(codes.length,8);assert.equal((await request('login',{password})).status,428);assert.equal((await request('login',{password,otp:await totpCode(init.secret)})).status,401);
+ const concurrent=await Promise.all([request('login',{password,backup_code:codes[0]}),request('login',{password,backup_code:codes[0]})]);assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,401]);const fresh=concurrent.find(r=>r.status===200).headers.get('set-cookie').split(';')[0];
+ const stored=(await db.prepare("SELECT * FROM admin_recovery_codes WHERE user_id='owner'").all()).results;assert.equal(stored.length,8);assert.equal(JSON.stringify(stored).includes(codes[1].replace(/-/g,'')),false);
+ const disable=await customerRequest('admin/mfa/disable',{password,backup_code:codes[1]},fresh);assert.equal(disable.status,200);await db.prepare('DELETE FROM limits').run();assert.equal((await request('login',{password})).status,200);
+});
+
+test('استعادة تشغيلية بمعاينة تنتهي وتمنع التعارض والطلبات النشطة ولا تمس الحسابات أو الطلبات',async()=>{
+ await loginOwner();const product=await db.prepare("SELECT * FROM products WHERE id='cappuccino'").first(),plan={tables:{products:[{...product,name:'اسم مستعاد'}]}};
+ assert.equal((await request('admin/restore-preview',{tables:{orders:[]}},true)).status,400);assert.equal((await request('admin/restore-preview',{tables:{products:[{...product,image:'javascript:alert(1)'}]}},true)).status,400);
+ const preview=await request('admin/restore-preview',plan,true);assert.equal(preview.status,200);const p=await preview.json();assert.equal(p.summary.products,1);assert.equal((await db.prepare("SELECT name FROM products WHERE id='cappuccino'").first()).name,product.name);
+ assert.equal((await request('admin/restore-apply',{id:p.id,confirm:'استعادة الإعدادات'},true)).status,409);
+ // Finish local fixtures only; the API never cancels live customer orders automatically.
+ await db.prepare("UPDATE orders SET status='cancelled' WHERE status IN('new','accepted','preparing','ready')").run();
+ const fresh=await(await request('admin/restore-preview',plan,true)).json();const counts=await db.prepare('SELECT (SELECT COUNT(*) FROM orders) orders,(SELECT COUNT(*) FROM customers) customers').first();
+ const result=await request('admin/restore-apply',{id:fresh.id,confirm:'استعادة الإعدادات'},true);assert.equal(result.status,200,await result.clone().text());assert.equal((await db.prepare("SELECT name FROM products WHERE id='cappuccino'").first()).name,'اسم مستعاد');assert.deepEqual(await db.prepare('SELECT (SELECT COUNT(*) FROM orders) orders,(SELECT COUNT(*) FROM customers) customers').first(),counts);
+ assert.equal((await request('admin/restore-apply',{id:fresh.id,confirm:'استعادة الإعدادات'},true)).status,409);
+ await db.prepare('DELETE FROM limits').run();const stale=await(await request('admin/restore-preview',plan,true)).json();await db.prepare("UPDATE products SET name='تغيير أحدث' WHERE id='cappuccino'").run();assert.equal((await request('admin/restore-apply',{id:stale.id,confirm:'استعادة الإعدادات'},true)).status,409);assert.equal((await db.prepare("SELECT name FROM products WHERE id='cappuccino'").first()).name,'تغيير أحدث');
+ await db.prepare('UPDATE products SET name=? WHERE id=?').bind(product.name,product.id).run();
+});
+
+test('بطاقة هدية حقيقية برمز لا يُحفظ صريحًا وتمنح مشروبين مرة واحدة تحت التزامن',async()=>{
+ const a=await newCustomer(),b=await newCustomer();const card=await(await customerRequest('customer/loyalty-create',{id:crypto.randomUUID(),token:token(),name:'بطاقة',contact:'33333333'},a.cookie)).json();await loginOwner();
+ const created=await request('admin/gifts',{label:'هدية اختبار',days:30},true);assert.equal(created.status,201);const gift=await created.json();assert.match(gift.code,/^ROYAL-/);const stored=await db.prepare('SELECT * FROM gift_cards WHERE id=?').bind(gift.id).first();assert.equal(JSON.stringify(stored).includes(gift.code.replace(/ROYAL-|-/g,'')),false);
+ assert.equal((await customerRequest('customer/gift-redeem',{code:gift.code},b.cookie)).status,409);
+ const results=await Promise.all([customerRequest('customer/gift-redeem',{code:gift.code},a.cookie),customerRequest('customer/gift-redeem',{code:gift.code},a.cookie)]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);assert.equal((await db.prepare('SELECT reward_drinks FROM loyalty_cards WHERE id=?').bind(card.card.id).first()).reward_drinks,2);assert.equal((await request('admin/gift-revoke',{id:gift.id},true)).status,409);
+ const unused=await(await request('admin/gifts',{label:'ملغاة',days:1},true)).json();assert.equal((await request('admin/gift-revoke',{id:unused.id},true)).status,200);assert.equal((await customerRequest('customer/gift-redeem',{code:unused.code},a.cookie)).status,409);
+});
+test('هدية الميلاد اختيارية ويعتمدها المالك مرة في السنة دون إضافة ختمات تلقائية',async()=>{
+ const a=await newCustomer(),date=new Date(Date.now()+10800000),month=date.getUTCMonth()+1,day=date.getUTCDate();assert.equal((await customerRequest('customer/profile',{name:'عميل',phone:'33333333',birthday_month:2,birthday_day:31},a.cookie)).status,400);
+ const updated=await customerRequest('customer/profile',{name:'عميل',phone:'33333333',birthday_month:month,birthday_day:day},a.cookie);assert.equal(updated.status,200);assert.equal((await updated.json()).user.birthday_month,month);const c=(await(await customerRequest('customer/loyalty-create',{id:crypto.randomUUID(),token:token(),name:'ميلاد',contact:'33333333'},a.cookie)).json()).card;
+ await loginOwner();const results=await Promise.all([request('admin/birthday-gift',{id:a.user.id},true),request('admin/birthday-gift',{id:a.user.id},true)]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);const balance=await db.prepare('SELECT reward_drinks,stamps,total_stamps FROM loyalty_cards WHERE id=?').bind(c.id).first();assert.equal(balance.reward_drinks,2);assert.equal(balance.stamps,0);assert.equal(balance.total_stamps,0);
+ assert.equal((await customerRequest('admin/birthday-gift',{id:a.user.id},a.cookie)).status,401);
+});
+
+test('مجموعة تجمع طلبات مستقلة دون كشف الأعضاء، وحد العضوية ذري ولكل حساب طلب واحد',async()=>{
+ await db.prepare('UPDATE settings SET capacity=200,opening_hour=0,closing_hour=24').run();const owner=await newCustomer(),a=await newCustomer(),b=await newCustomer();const made=await customerRequest('customer/groups',{label:'مجموعة الأصدقاء',branch_id:'main',max_members:2,hours:2},owner.cookie);assert.equal(made.status,201);const group=await made.json();
+ const publicInfo=(await(await request('group?code='+group.code)).json()).group;assert.equal(publicInfo.members,0);for(const field of ['owner_customer_id','name','phone','orders','id'])assert.equal(publicInfo[field],undefined);
+ assert.equal((await request('orders',{...order(),group_code:group.code})).status,401);const first={...order(),group_code:group.code};assert.equal((await customerRequest('orders',first,a.cookie)).status,201);assert.equal((await customerRequest('orders',{...order(),group_code:group.code},a.cookie)).status,409);
+ const results=await Promise.all([customerRequest('orders',{...order(),group_code:group.code},owner.cookie),customerRequest('orders',{...order(),group_code:group.code},b.cookie)]);assert.deepEqual(results.map(r=>r.status).sort(),[201,409]);assert.equal((await(await request('group?code='+group.code)).json()).group.members,2);
+ assert.equal((await customerRequest('customer/group-close',{id:group.id},a.cookie)).status,404);assert.equal((await customerRequest('customer/group-close',{id:group.id},owner.cookie)).status,200);assert.equal((await customerRequest('orders',{...order(),group_code:group.code},b.cookie)).status,409);
+});
+
+test('طقس حقيقي محفوظ مؤقتًا يحترم المصدر ولا يرسل موقع العميل',async()=>{
+ const {parseWeather}=await import('../src/weather.js');const time=Math.floor(Date.now()/1000),sample={properties:{meta:{updated_at:new Date(time*1000).toISOString()},timeseries:[{time:new Date(time*1000).toISOString(),data:{instant:{details:{air_temperature:31}}}}]}};const parsed=parseWeather(sample,time);assert.equal(parsed.suggested_category,'cold');assert.equal(parsed.source,'MET Norway');assert.throws(()=>parseWeather({properties:{meta:{updated_at:'2000-01-01T00:00:00Z'},timeseries:[]}},time));
+ let calls=0;mock.get('https://api.met.no').intercept({path:'/weatherapi/locationforecast/2.0/compact?lat=26.22&lon=50.58',method:'GET'}).reply(200,()=>{calls++;return sample;}).persist();
+ const responses=await Promise.all([request('weather'),request('weather'),request('weather')]);assert.ok(responses.some(r=>r.status===200));assert.equal(calls,1);const cached=await(await request('weather')).json();assert.equal(cached.temperature,31);assert.equal(cached.cached,true);assert.equal(calls,1);assert.equal(cached.location_lat,undefined);
+});
+
+test('لغز اليوم مستقل لكل حساب وإجابته تمنح نقاطًا معنوية مرة واحدة فقط',async()=>{
+ const {coffeeQuestions}=await import('../src/experience.js'),a=await newCustomer(),b=await newCustomer();const q=(await(await customerRequest('customer/quiz',undefined,a.cookie)).json());assert.equal(q.question.answer,undefined);assert.equal(q.result,null);const answer=coffeeQuestions.find(x=>x.key===q.question.key).answer;
+ const payload={day:q.day,key:q.question.key,answer};const responses=await Promise.all([customerRequest('customer/quiz',payload,a.cookie),customerRequest('customer/quiz',payload,a.cookie)]);assert.ok(responses.every(r=>r.status===200));assert.equal((await db.prepare('SELECT COUNT(*) n FROM customer_quizzes WHERE customer_id=?').bind(a.user.id).first()).n,1);assert.equal((await(await customerRequest('customer/club',undefined,a.cookie)).json()).points,10);
+ assert.equal((await customerRequest('customer/quiz',{...payload,answer:(answer+1)%3},a.cookie)).status,409);assert.equal((await(await customerRequest('customer/quiz',undefined,b.cookie)).json()).result,null);assert.equal((await customerRequest('customer/quiz',{...payload,day:'2000-01-01'},a.cookie)).status,409);
+});
+test('الخلطات المسماة خاصة وتظل ضمن المكونات المسموحة، ولا يكتب حساب فوق خلطة آخر',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),recipe={product_id:'tea',name:'شاي على ذوقي',notes:'قليل الحرارة',options:{size:'small',milk:'whole',sugar:'normal'}};assert.equal((await customerRequest('customer/recipes',{...recipe,options:{sugar:'none'}},a.cookie)).status,400);
+ const made=await customerRequest('customer/recipes',recipe,a.cookie);assert.equal(made.status,200);const {id}=await made.json();assert.equal((await customerRequest('customer/recipes',{...recipe,id,name:'اختراق'},b.cookie)).status,404);assert.equal((await(await customerRequest('customer/recipes',undefined,b.cookie)).json()).recipes.length,0);
+ const collision=crypto.randomUUID(),results=await Promise.all([customerRequest('customer/recipes',{...recipe,id:collision,name:'حساب أ'},a.cookie),customerRequest('customer/recipes',{...recipe,id:collision,name:'حساب ب'},b.cookie)]);assert.deepEqual(results.map(r=>r.status).sort(),[200,404]);const saved=await db.prepare('SELECT customer_id,name FROM customer_recipes WHERE id=?').bind(collision).first();assert.equal(saved.name,saved.customer_id===a.user.id?'حساب أ':'حساب ب');
+ assert.equal((await customerRequest('customer/recipe-delete',{id},b.cookie)).status,404);assert.equal((await customerRequest('customer/recipe-delete',{id},a.cookie)).status,200);
+});
+
+test('تبديل الحساب أثناء تأكيد الطلب لا يلصق بيانات حساب سابق بالحساب الجديد',async()=>{
+ const a=await newCustomer(),b=await newCustomer(),o={...order(),expected_customer_id:a.user.id};assert.equal((await customerRequest('orders',o,b.cookie)).status,409);assert.equal(await db.prepare('SELECT id FROM orders WHERE id=?').bind(o.id).first(),null);assert.equal((await request('orders',{...order(),expected_customer_id:a.user.id})).status,409);
+});
+
+test('التقارير الدورية تحفظ الفترة السابقة مرة وتصدّر Excel وتسمح بتعديل جدول عند بلوغ الحد',async()=>{
+ const {nextReportDue}=await import('../src/periodic-reports.js');assert.equal(new Date(nextReportDue('weekly',Date.parse('2026-11-17T10:00:00Z')/1000)*1000).toISOString(),'2026-11-23T05:00:00.000Z');assert.equal(new Date(nextReportDue('monthly',Date.parse('2026-11-17T10:00:00Z')/1000)*1000).toISOString(),'2026-12-01T05:00:00.000Z');
+ await loginOwner();const create={name:'تقرير أسبوعي',period:'weekly',branch_id:'main',enabled:true},ids=[];for(let i=0;i<3;i++){const r=await request('admin/report-schedules',create,true);assert.equal(r.status,200);ids.push((await r.json()).id);}
+ assert.equal((await request('admin/report-schedules',create,true)).status,409);assert.equal((await request('admin/report-schedules',{...create,id:ids[0],name:'اسم معدل'},true)).status,200);
+ const runs=await Promise.all([request('admin/report-run',{id:ids[0]},true),request('admin/report-run',{id:ids[0]},true)]);assert.ok(runs.some(r=>r.status===200));assert.ok(runs.every(r=>[200,409].includes(r.status)));
+ const list=await(await request('admin/report-snapshots',undefined,true)).json();assert.equal(list.snapshots.length,1);const id=list.snapshots[0].id;const data=await(await request('admin/report-snapshot?id='+id,undefined,true)).json();assert.equal(data.period.branch,'main');assert.ok(data.summary);assert.equal(JSON.stringify(data).includes('phone'),false);const excel=await request('admin/report-snapshot?id='+id+'&format=xlsx',undefined,true);assert.equal(excel.status,200);assert.match(excel.headers.get('content-type'),/spreadsheetml/);assert.equal((await request('admin/report-snapshot?id='+id)).status,401);
+});

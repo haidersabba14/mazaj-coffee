@@ -11,11 +11,12 @@ struct RoyalOrder: Decodable, Identifiable {
     let called_at: Double?; let acknowledged_at: Double?; let ready_at: Double?; let notification_permission: String?
     let priority: Int; let queue_position: Int; let assigned_to: String?; let version: Int
     let notification: NotificationState?; let email_status: String
+    let scheduled_at: Double?; let preparation_due_at: Double?; let car_description: String?; let arrived_at: Double?; let group_label:String?
     var number: String { order_label ?? order_number.map { "CR-\($0)" } ?? String(id.prefix(8)) }
     var overdue: Bool { !["ready","delivered","cancelled"].contains(status) && (estimated_ready_at ?? .greatestFiniteMagnitude) < Date().timeIntervalSince1970 }
 }
-struct RoyalProduct: Decodable, Identifiable { let id: String; let name: String; let description: String; let category: String; let image: String; let available: Int; let stock: Int; let prep_minutes: Int }
-struct RoyalSettings: Decodable { let accepting: Int; let opening_hour: Int; let closing_hour: Int; let busy_mode: Int; let maintenance: Int; let capacity: Int; let auto_accept: Int; let brand_name: String }
+struct RoyalProduct: Decodable, Identifiable { let id: String; let name: String; let description: String; let category: String; let image: String; let available: Int; let stock: Int; let prep_minutes: Int; let available_from:Double?; let available_until:Double?; let seasonal_label:String?; let featured:Int? }
+struct RoyalSettings: Decodable { let accepting: Int; let opening_hour: Int; let closing_hour: Int; let busy_mode: Int; let maintenance: Int; let capacity: Int; let auto_accept: Int; let brand_name: String; let slot_capacity:Int?; let schedule_days:Int? }
 struct RoyalStats: Decodable { let daily: Int?; let weekly: Int?; let waiting:Int?; let preparing:Int?; let ready:Int? }
 struct RoyalPopular: Decodable { let name: String; let quantity: Int }
 struct RoyalData: Decodable { let orders: [RoyalOrder]; let products: [RoyalProduct]; let settings: RoyalSettings; let stats: RoyalStats; let popular: [RoyalPopular]; let user: RoyalUser }

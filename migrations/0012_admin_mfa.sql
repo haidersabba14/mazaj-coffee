@@ -1,0 +1,2 @@
+CREATE TABLE admin_second_factors(user_id TEXT PRIMARY KEY,secret TEXT,enabled INTEGER NOT NULL DEFAULT 0,pending_secret TEXT,pending_expires INTEGER NOT NULL DEFAULT 0,last_counter INTEGER NOT NULL DEFAULT -1,version INTEGER NOT NULL DEFAULT 0,operation_nonce TEXT NOT NULL DEFAULT '');
+CREATE TABLE admin_recovery_codes(user_id TEXT NOT NULL REFERENCES admin_second_factors(user_id) ON DELETE CASCADE,code_hash TEXT NOT NULL UNIQUE,used_at INTEGER,PRIMARY KEY(user_id,code_hash));

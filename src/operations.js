@@ -1,3 +1,8 @@
+import {periodicRoutes} from './periodic-reports.js';
+import {giftRoutes} from './gifts.js';
+import {restoreRoutes} from './restore.js';
+import {mfaRoutes} from './mfa.js';
+import {planningRoutes} from './planning.js';
 import {customerAdmin} from './customer-suite.js';
 import {authorizedCustomerOrder} from './customers.js';
 import {expansion} from './expansion.js';
@@ -29,9 +34,14 @@ export async function operations(req,env,ctx,h,actor=null){
   const b=await body(req),o=await owned(b);if(!o.called_at||o.status!=='ready')fail('لا يوجد استدعاء جاهز للتأكيد',409);const changed=await env.DB.prepare('UPDATE orders SET acknowledged_at=? WHERE id=? AND acknowledged_at IS NULL RETURNING acknowledged_at').bind(now(),o.id).first();if(changed)await audit(env,{id:'customer'},'customer_acknowledged',o.id);return json({ok:true,acknowledged_at:changed?.acknowledged_at||o.acknowledged_at});
  }
  if(!p.startsWith('/api/admin/'))return null;
+ const periodic=await periodicRoutes(req,env,h,actor);if(periodic)return periodic;
+ const gifted=await giftRoutes(req,env,h,actor);if(gifted)return gifted;
+ const restored=await restoreRoutes(req,env,h,actor);if(restored)return restored;
+ const mfa=await mfaRoutes(req,env,h,actor);if(mfa)return mfa;
+ const planResponse=await planningRoutes(req,env,h,actor);if(planResponse)return planResponse;
  const customerResponse=await customerAdmin(req,env,h,actor);if(customerResponse)return customerResponse;
  if(p==='/api/admin/me'&&m==='GET')return json({user:{id:actor.id,name:actor.name,role:actor.role}});
- if(p==='/api/admin/events'&&m==='GET'){ctx.waitUntil(processNotifications(env));const data=await env.DB.prepare('SELECT (SELECT COUNT(*) FROM audit_log)+(SELECT COUNT(*) FROM notification_attempts)+(SELECT COALESCE(SUM(attempts),0) FROM notification_jobs)+(SELECT COALESCE(SUM(acknowledged_at),0) FROM orders) cursor').first();return json({cursor:data.cursor,server_time:now(),poll_after:5});}
+ if(p==='/api/admin/events'&&m==='GET'){ctx.waitUntil(processNotifications(env));const data=await env.DB.prepare('SELECT (SELECT COUNT(*) FROM audit_log)+(SELECT COUNT(*) FROM notification_attempts)+(SELECT COALESCE(SUM(attempts),0) FROM notification_jobs)+(SELECT COALESCE(SUM(acknowledged_at),0) FROM orders)+(SELECT COALESCE(MAX(seq),0) FROM order_events) cursor').first();return json({cursor:data.cursor,server_time:now(),poll_after:5});}
  if(p==='/api/admin/audit'&&m==='GET'){await owner();return json({events:(await env.DB.prepare('SELECT a.*,COALESCE(s.name,CASE a.user_id WHEN \'owner\' THEN \'المالك\' WHEN \'customer\' THEN \'الزبون\' ELSE \'النظام\' END) user_name FROM audit_log a LEFT JOIN staff s ON s.id=a.user_id ORDER BY a.created_at DESC LIMIT 200').all()).results});}
  if(p==='/api/admin/preferences'){
   if(m==='GET'){const r=await env.DB.prepare('SELECT settings FROM admin_preferences WHERE user_id=?').bind(actor.id).first();return json({settings:r?JSON.parse(r.settings):{}});}
@@ -81,10 +91,11 @@ export async function changeStatus(env,ctx,actor,b,h){
  const {text,fail,json}=h,id=text(b.id,36,36),o=await env.DB.prepare('SELECT * FROM orders WHERE id=?').bind(id).first();if(!o)fail('الطلب غير موجود',404);if(!allowedTransitions[b.status])fail('حالة غير صالحة');
  if(o.status===b.status){if(b.status==='ready'&&b.call!==false){await enqueueNotification(env,o,'ready');ctx.waitUntil(processNotifications(env));}return json({ok:true,unchanged:true});}
  if(!allowedTransitions[o.status]?.includes(b.status))fail('انتقال حالة غير مسموح، حدّث الطلب أولًا',409);
+ if(b.status==='preparing'&&o.preparation_due_at&&o.preparation_due_at>now())fail('لم يحن وقت بدء تحضير الطلب المجدول بعد',409);
  const minutes=b.eta_minutes??15;if(['accepted','preparing'].includes(b.status)&&(!Number.isInteger(minutes)||minutes<1||minutes>120))fail('وقت التجهيز من دقيقة إلى ١٢٠ دقيقة');
  const reason=b.status==='cancelled'?text(b.reason||'تم رفض الطلب من المقهى',1,300):'';const t=now(),call=b.status==='ready'&&b.call!==false;
  const expected=b.version??o.version;
- const updated=await env.DB.prepare("UPDATE orders SET status=?,estimated_ready_at=CASE WHEN ? IN('accepted','preparing') THEN ? ELSE estimated_ready_at END,rejection_reason=?,accepted_at=CASE WHEN ? IN('accepted','preparing') THEN COALESCE(accepted_at,?) ELSE accepted_at END,preparation_started_at=CASE WHEN ?='preparing' THEN COALESCE(preparation_started_at,?) ELSE preparation_started_at END,ready_at=CASE WHEN ?='ready' THEN ? ELSE ready_at END,delivered_at=CASE WHEN ?='delivered' THEN ? ELSE delivered_at END,called_at=CASE WHEN ? THEN COALESCE(called_at,?) ELSE called_at END,call_count=CASE WHEN ? THEN 1 ELSE call_count END,version=version+1 WHERE id=? AND version=? RETURNING *").bind(b.status,b.status,t+minutes*60,reason,b.status,t,b.status,t,b.status,t,b.status,t,+call,t,+call,id,expected).first();
+ const updated=await env.DB.prepare("UPDATE orders SET status=?,estimated_ready_at=CASE WHEN ? IN('accepted','preparing') THEN ? ELSE estimated_ready_at END,rejection_reason=?,accepted_at=CASE WHEN ? IN('accepted','preparing') THEN COALESCE(accepted_at,?) ELSE accepted_at END,preparation_started_at=CASE WHEN ?='preparing' THEN COALESCE(preparation_started_at,?) ELSE preparation_started_at END,ready_at=CASE WHEN ?='ready' THEN ? ELSE ready_at END,delivered_at=CASE WHEN ?='delivered' THEN ? ELSE delivered_at END,called_at=CASE WHEN ? THEN COALESCE(called_at,?) ELSE called_at END,call_count=CASE WHEN ? THEN 1 ELSE call_count END,version=version+1 WHERE id=? AND version=? RETURNING *").bind(b.status,b.status,o.scheduled_at||t+minutes*60,reason,b.status,t,b.status,t,b.status,t,b.status,t,+call,t,+call,id,expected).first();
  if(!updated)fail('عدّل موظف آخر الطلب. حدّث الصفحة وحاول مجددًا.',409);await audit(env,actor,'status:'+b.status,id);
  const kind=call?'ready':b.status==='cancelled'?'cancelled':['accepted','preparing'].includes(b.status)?'accepted':null;if(kind){await enqueueNotification(env,updated,kind);ctx.waitUntil(processNotifications(env));}
  return json({ok:true,status:updated.status,version:updated.version,called_at:updated.called_at});

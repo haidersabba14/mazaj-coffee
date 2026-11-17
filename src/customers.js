@@ -1,3 +1,4 @@
+import {birthdayValues} from './gifts.js';
 const now=()=>Math.floor(Date.now()/1000),encode=s=>new TextEncoder().encode(s);
 const hex=b=>Array.from(new Uint8Array(b),v=>v.toString(16).padStart(2,'0')).join('');
 const random=()=>hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -5,7 +6,7 @@ const digest=async s=>hex(await crypto.subtle.digest('SHA-256',encode(s)));
 const cookieName='__Host-royal_customer',ttl=7*86400;
 const cookie=(value,age=ttl)=>`${cookieName}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`;
 const cookieToken=req=>(req.headers.get('cookie')||'').match(/(?:^|;\s*)__Host-royal_customer=([a-f0-9]{64})(?:;|$)/)?.[1];
-function view(c){return {id:c.id,username:c.username,name:c.name,phone:c.phone,created_at:c.created_at};}
+function view(c){return {id:c.id,username:c.username,name:c.name,phone:c.phone,created_at:c.created_at,birthday_month:c.birthday_month??null,birthday_day:c.birthday_day??null};}
 async function keyed(env,value){const key=await crypto.subtle.importKey('raw',encode(env.CUSTOMER_AUTH_SECRET),{name:'HMAC',hash:'SHA-256'},false,['sign']);return hex(await crypto.subtle.sign('HMAC',key,encode(value)));}
 function equal(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
 export async function customerPasswordHash(env,password,salt=random()){
@@ -19,7 +20,7 @@ export async function verifyCustomerPassword(env,password,stored){
 }
 export async function customerFromRequest(req,env){
  const token=cookieToken(req);if(!token)return null;
- return env.DB.prepare('SELECT c.id,c.username,c.name,c.phone,c.created_at,c.password_hash,c.recovery_hash,c.auth_version,s.token_hash session_hash FROM customer_sessions s JOIN customers c ON c.id=s.customer_id AND c.auth_version=s.auth_version WHERE s.token_hash=? AND s.expires>? AND c.blocked=0').bind(await digest(token),now()).first();
+ return env.DB.prepare('SELECT c.id,c.username,c.name,c.phone,c.created_at,c.birthday_month,c.birthday_day,c.password_hash,c.recovery_hash,c.auth_version,s.token_hash session_hash FROM customer_sessions s JOIN customers c ON c.id=s.customer_id AND c.auth_version=s.auth_version WHERE s.token_hash=? AND s.expires>? AND c.blocked=0').bind(await digest(token),now()).first();
 }
 // The same access check protects tracking, push subscription and acknowledgement.
 // Account ownership is set by the server; a phone number never proves ownership.
@@ -69,7 +70,7 @@ export async function customerRoutes(req,env,h){
   return json({ok:true,recovery_code:recovery},200,{'Set-Cookie':cookie('',0)});
  }
  if(p==='/api/customer/profile'&&m==='POST'){
-  requireActor();const b=await read();await env.DB.prepare('UPDATE customers SET name=?,phone=?,updated_at=? WHERE id=?').bind(text(b.name,2,100),phone(b.phone),now(),actor.id).run();const c=await env.DB.prepare('SELECT * FROM customers WHERE id=?').bind(actor.id).first();return json({user:view(c)});
+  requireActor();const b=await read(),birthday=birthdayValues(b.birthday_month===undefined?actor.birthday_month??null:b.birthday_month,b.birthday_day===undefined?actor.birthday_day??null:b.birthday_day,fail);await env.DB.prepare('UPDATE customers SET name=?,phone=?,birthday_month=?,birthday_day=?,updated_at=? WHERE id=?').bind(text(b.name,2,100),phone(b.phone),birthday.month,birthday.day,now(),actor.id).run();const c=await env.DB.prepare('SELECT * FROM customers WHERE id=?').bind(actor.id).first();return json({user:view(c)});
  }
  if(p==='/api/customer/orders'&&m==='GET'){
   requireActor();const result=await env.DB.prepare('SELECT id,order_number,status,items,customization,created_at,total,fulfillment,estimated_ready_at,rejection_reason,called_at,acknowledged_at FROM orders WHERE customer_id=? ORDER BY created_at DESC,id DESC LIMIT 100').bind(actor.id).all();return json({orders:result.results.map(o=>({...o,order_label:'CR-'+o.order_number,items:JSON.parse(o.items),customization:JSON.parse(o.customization)}))});

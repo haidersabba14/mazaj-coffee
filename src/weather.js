@@ -1,0 +1,16 @@
+const now=()=>Math.floor(Date.now()/1000),key='met-bahrain-v1';
+export function parseWeather(data,time=now()){
+ const p=data?.properties,updated=Date.parse(p?.meta?.updated_at)/1000;if(!Number.isFinite(updated)||updated<time-12*3600||updated>time+3600)throw Error('weather_outdated');
+ const samples=(p.timeseries||[]).map(x=>({at:Date.parse(x.time)/1000,temperature:x.data?.instant?.details?.air_temperature})).filter(x=>Number.isFinite(x.at)&&Number.isFinite(x.temperature)&&x.temperature>=-40&&x.temperature<=60);const sample=samples.sort((a,b)=>Math.abs(a.at-time)-Math.abs(b.at-time))[0];if(!sample||Math.abs(sample.at-time)>3600)throw Error('weather_missing');return {temperature:sample.temperature,forecast_at:sample.at,updated_at:updated,suggested_category:sample.temperature>=27?'cold':'hot',source:'MET Norway',license:'CC BY 4.0',source_url:'https://api.met.no/weatherapi/locationforecast/2.0/documentation',city:'البحرين'};
+}
+function decodeCache(row,time){try{const data=JSON.parse(row?.data||'null');if(data&&data.updated_at>=time-12*3600&&data.forecast_at>=time-3*3600)return data;}catch{}return null;}
+export async function weatherRoute(req,env,h){
+ if(new URL(req.url).pathname!=='/api/weather'||req.method!=='GET')return null;const {json,fail,rate}=h;await rate(env,'weather:'+(req.headers.get('CF-Connecting-IP')||'local'),30,600);const time=now();await env.DB.prepare('INSERT OR IGNORE INTO integration_cache(key) VALUES(?)').bind(key).run();let row=await env.DB.prepare('SELECT * FROM integration_cache WHERE key=?').bind(key).first(),cached=decodeCache(row,time);if(row.expires>time&&cached)return json({...cached,cached:true});
+ const lease=await env.DB.prepare('UPDATE integration_cache SET lease_until=? WHERE key=? AND lease_until<=? AND expires<=? RETURNING key').bind(time+15,key,time,time).first();if(!lease){row=await env.DB.prepare('SELECT * FROM integration_cache WHERE key=?').bind(key).first();cached=decodeCache(row,time);if(cached)return json({...cached,cached:true});fail('يجري تحديث طقس البحرين. حاول بعد لحظات',503);}
+ try{
+  const response=await fetch('https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=26.22&lon=50.58',{headers:{'User-Agent':'CoffeeRoyal/3.3 https://mazaj-cafe-995.pages.dev',...(row.last_modified?{'If-Modified-Since':row.last_modified}:{})},signal:AbortSignal.timeout(6000),redirect:'manual'});
+  const expires=Math.max(time+1800,Math.floor(Date.parse(response.headers.get('Expires')||'')/1000)||0);
+  if(response.status===304&&cached){await env.DB.prepare('UPDATE integration_cache SET expires=?,lease_until=0 WHERE key=?').bind(expires,key).run();return json({...cached,cached:true});}
+  if(!response.ok)throw Error('weather_provider');const data=parseWeather(await response.json(),time),modified=(response.headers.get('Last-Modified')||'').slice(0,100);await env.DB.prepare('UPDATE integration_cache SET data=?,expires=?,last_modified=?,lease_until=0 WHERE key=?').bind(JSON.stringify(data),expires,modified,key).run();return json({...data,cached:false});
+ }catch{await env.DB.prepare('UPDATE integration_cache SET expires=?,lease_until=0 WHERE key=?').bind(time+600,key).run();if(cached)return json({...cached,cached:true,stale:true});fail('تعذر جلب طقس البحرين الآن. يمكنك اختيار مشروبك من القائمة',503);}
+}

@@ -27,21 +27,23 @@ async function sendWeb(env,device,payload){
  const r=await fetch(device.endpoint,{...options,redirect:'manual',signal:AbortSignal.timeout(10000)});
  return {state:r.ok?'sent':[404,410].includes(r.status)?'expired':'failed',status:r.status,code:r.ok?'':'push_http_'+r.status};
 }
-export async function processNotifications(env,limit=8){
+export async function processNotifications(env,limit=1){
  const jobs=(await env.DB.prepare("SELECT id FROM notification_jobs WHERE state IN('pending','retry','sending') AND attempts<4 AND next_attempt<=? AND lease_until<? ORDER BY created_at LIMIT ?").bind(now(),now(),limit).all()).results;
  for(const {id} of jobs){
   const job=await env.DB.prepare("UPDATE notification_jobs SET state='sending',attempts=attempts+1,lease_until=? WHERE id=? AND state IN('pending','retry','sending') AND lease_until<? RETURNING *").bind(now()+180,id,now()).first();if(!job)continue;
   const devices=(await env.DB.prepare(job.kind==='new'?"SELECT p.* FROM push_subscriptions p JOIN sessions s ON s.token_hash=p.session_hash AND s.expires>unixepoch() LEFT JOIN staff f ON f.id=p.user_id WHERE p.user_id IS NOT NULL AND p.active=1 AND (p.user_id='owner' OR f.active=1) LIMIT 30":"SELECT * FROM push_subscriptions WHERE order_id=? AND active=1 LIMIT 3").bind(...(job.kind==='new'?[]:[job.order_id])).all()).results;
   if(!devices.length){await env.DB.prepare("UPDATE notification_jobs SET state='no_subscription',lease_until=0 WHERE id=?").bind(id).run();continue;}
-  let failed=false,sent=false,unconfigured=false;
+  let failed=false,sent=false,unconfigured=false;const writes=[];
+  const accepted=new Set((await env.DB.prepare("SELECT subscription_id FROM notification_attempts WHERE job_id=? AND state='sent'").bind(id).all()).results.map(r=>r.subscription_id));
   for(const d of devices){
    // An accepted provider response is recorded once; retries target failed devices only.
-   if(await env.DB.prepare("SELECT 1 FROM notification_attempts WHERE job_id=? AND subscription_id=? AND state='sent'").bind(id,d.id).first()){sent=true;continue;}
+   if(accepted.has(d.id)){sent=true;continue;}
    let result;try{const payload=JSON.parse(job.payload);result=d.channel==='apns'?await sendAPNS(env,d,payload):await sendWeb(env,d,payload);}catch{result={state:'failed',code:'transport_error'};}
-   await env.DB.prepare('INSERT INTO notification_attempts VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),id,d.id,result.state,result.status||null,result.code||'',now()).run();
-   if(result.state==='expired')await env.DB.prepare('UPDATE push_subscriptions SET active=0 WHERE id=?').bind(d.id).run();
+   writes.push(env.DB.prepare('INSERT INTO notification_attempts VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),id,d.id,result.state,result.status||null,result.code||'',now()));
+   if(result.state==='expired')writes.push(env.DB.prepare('UPDATE push_subscriptions SET active=0 WHERE id=?').bind(d.id));
    if(result.state==='sent')sent=true;else if(result.state==='unconfigured')unconfigured=true;else if(result.state!=='expired')failed=true;
   }
+  if(writes.length)await env.DB.batch(writes);
   const state=failed?(job.attempts<4?'retry':'failed'):unconfigured?'unconfigured':sent?'sent':'expired';
   await env.DB.prepare('UPDATE notification_jobs SET state=?,lease_until=0,next_attempt=? WHERE id=?').bind(state,now()+Math.min(3600,30*2**job.attempts),id).run();
  }

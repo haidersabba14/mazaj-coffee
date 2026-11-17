@@ -1,0 +1,6 @@
+ALTER TABLE customers ADD COLUMN birthday_month INTEGER;
+ALTER TABLE customers ADD COLUMN birthday_day INTEGER;
+CREATE TABLE gift_cards(id TEXT PRIMARY KEY,code_hash TEXT NOT NULL UNIQUE,label TEXT NOT NULL,created_by TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,redeemed_by TEXT REFERENCES customers(id) ON DELETE SET NULL,redeemed_at INTEGER,card_id TEXT REFERENCES loyalty_cards(id),claim TEXT NOT NULL DEFAULT '');
+CREATE TABLE loyalty_grants(id TEXT PRIMARY KEY,customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,card_id TEXT NOT NULL REFERENCES loyalty_cards(id),kind TEXT NOT NULL,period TEXT NOT NULL,drinks INTEGER NOT NULL CHECK(drinks=2),created_by TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(customer_id,kind,period));
+CREATE TRIGGER loyalty_grant_check BEFORE INSERT ON loyalty_grants BEGIN SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM loyalty_cards WHERE id=NEW.card_id AND customer_id=NEW.customer_id AND blocked=0) THEN RAISE(ABORT,'grant_card_invalid') END; END;
+CREATE TRIGGER loyalty_grant_credit AFTER INSERT ON loyalty_grants BEGIN UPDATE loyalty_cards SET reward_drinks=reward_drinks+NEW.drinks WHERE id=NEW.card_id; END;

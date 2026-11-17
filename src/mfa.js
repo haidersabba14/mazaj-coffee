@@ -1,0 +1,47 @@
+import {audit} from './operations.js';
+const bytes=s=>new TextEncoder().encode(s),now=()=>Math.floor(Date.now()/1000),hex=b=>Array.from(new Uint8Array(b),v=>v.toString(16).padStart(2,'0')).join('');
+const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+export function base32(data){let output='',acc=0,bits=0;for(const b of data){acc=(acc<<8)|b;bits+=8;while(bits>=5){bits-=5;output+=alphabet[(acc>>>bits)&31];}}if(bits)output+=alphabet[(acc<<(5-bits))&31];return output;}
+function unbase32(s){let acc=0,bits=0,result=[];for(const c of s.toUpperCase().replace(/=+$/,'')){const value=alphabet.indexOf(c);if(value<0)throw Error('invalid base32');acc=(acc<<5)|value;bits+=5;if(bits>=8){bits-=8;result.push((acc>>>bits)&255);}}return new Uint8Array(result);}
+export async function totpCode(secret,time=now(),digits=6){const counter=Math.floor(time/30),buffer=new ArrayBuffer(8),view=new DataView(buffer);view.setUint32(0,Math.floor(counter/4294967296));view.setUint32(4,counter>>>0);const key=await crypto.subtle.importKey('raw',unbase32(secret),{name:'HMAC',hash:'SHA-1'},false,['sign']),mac=new Uint8Array(await crypto.subtle.sign('HMAC',key,buffer)),offset=mac[mac.length-1]&15,value=((mac[offset]&127)<<24)|(mac[offset+1]<<16)|(mac[offset+2]<<8)|mac[offset+3];return String((value>>>0)%10**digits).padStart(digits,'0');}
+function equal(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
+const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))),from64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function encryptionKey(env){if(!env.CUSTOMER_AUTH_SECRET)throw Error('mfa_unconfigured');const material=await crypto.subtle.digest('SHA-256',bytes('royal-admin-mfa-encryption-v1:'+env.CUSTOMER_AUTH_SECRET));return crypto.subtle.importKey('raw',material,{name:'AES-GCM'},false,['encrypt','decrypt']);}
+export async function encryptMFA(env,id,secret){const nonce=crypto.getRandomValues(new Uint8Array(12)),key=await encryptionKey(env),encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce,additionalData:bytes(id)},key,bytes(secret));return b64(nonce)+'.'+b64(encrypted);}
+async function decrypt(env,id,value){const [nonce,data]=value.split('.');return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:from64(nonce),additionalData:bytes(id)},await encryptionKey(env),from64(data)));}
+async function counterFor(secret,code,time=now()){if(typeof code!=='string'||!/^\d{6}$/.test(code))return null;for(const offset of [0,-1,1]){const t=time+offset*30;if(equal(await totpCode(secret,t),code))return Math.floor(t/30);}return null;}
+async function recoveryHash(env,id,code){const key=await crypto.subtle.importKey('raw',bytes(env.CUSTOMER_AUTH_SECRET),{name:'HMAC',hash:'SHA-256'},false,['sign']);return hex(await crypto.subtle.sign('HMAC',key,bytes('royal-admin-mfa-backup-v1:'+id+':'+code)));}
+async function newCodes(env,id,claim){const codes=Array.from({length:8},()=>hex(crypto.getRandomValues(new Uint8Array(8))));return {display:codes.map(c=>c.match(/.{4}/g).join('-')),statements:await Promise.all(codes.map(async code=>env.DB.prepare('INSERT INTO admin_recovery_codes(user_id,code_hash) SELECT ?,? WHERE EXISTS(SELECT 1 FROM admin_second_factors WHERE user_id=? AND operation_nonce=?)').bind(id,await recoveryHash(env,id,code),id,claim)))};}
+export async function checkMFA(env,id,otp,backup,fail){
+ const factor=await env.DB.prepare('SELECT * FROM admin_second_factors WHERE user_id=? AND enabled=1').bind(id).first();if(!factor)return false;
+ if(!otp&&!backup)fail('أدخل رمز المصادقة الثنائية أو أحد رموز الاسترداد',428);
+ if(backup){if(typeof backup!=='string')fail('رمز الاسترداد غير صحيح',401);const normalized=backup.toLowerCase().replace(/-/g,'').trim();if(!/^[a-f0-9]{16}$/.test(normalized))fail('رمز الاسترداد غير صحيح',401);const r=await env.DB.prepare('UPDATE admin_recovery_codes SET used_at=? WHERE user_id=? AND code_hash=? AND used_at IS NULL RETURNING code_hash').bind(now(),id,await recoveryHash(env,id,normalized)).first();if(!r)fail('رمز الاسترداد غير صحيح أو استُخدم',401);return true;}
+ const secret=await decrypt(env,id,factor.secret),counter=await counterFor(secret,otp);if(counter===null||counter<=factor.last_counter)fail('رمز المصادقة غير صحيح أو استُخدم. انتظر رمزًا جديدًا',401);
+ const changed=await env.DB.prepare('UPDATE admin_second_factors SET last_counter=? WHERE user_id=? AND enabled=1 AND version=? AND last_counter<? RETURNING user_id').bind(counter,id,factor.version,counter).first();if(!changed)fail('استُخدم الرمز بالفعل أو تغيّرت إعدادات المصادقة',401);return true;
+}
+async function currentPassword(env,actor,password,fail){
+ if(typeof password!=='string'||password.length<1||password.length>200)fail('أدخل كلمة المرور الحالية');const value=actor.id==='owner'?env.ADMIN_PASSWORD_HASH:(await env.DB.prepare('SELECT password_hash FROM staff WHERE id=? AND active=1').bind(actor.id).first())?.password_hash;if(!value)fail('الحساب غير متاح',401);
+ const [salt,expected]=value.split(':'),key=await crypto.subtle.importKey('raw',bytes(password),'PBKDF2',false,['deriveBits']),actual=hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:bytes(salt),hash:'SHA-256',iterations:100000},key,256));if(!equal(actual,expected))fail('كلمة المرور الحالية غير صحيحة',401);
+}
+export async function mfaRoutes(req,env,h,actor){
+ const p=new URL(req.url).pathname,m=req.method;if(!p.startsWith('/api/admin/mfa'))return null;const {json,fail,rate}=h;
+ if(!env.CUSTOMER_AUTH_SECRET)fail('المصادقة الثنائية غير مهيأة على الخادم',503);
+ if(p==='/api/admin/mfa'&&m==='GET'){const r=await env.DB.prepare('SELECT enabled,pending_expires FROM admin_second_factors WHERE user_id=?').bind(actor.id).first(),count=(await env.DB.prepare('SELECT COUNT(*) n FROM admin_recovery_codes WHERE user_id=? AND used_at IS NULL').bind(actor.id).first()).n;return json({enabled:!!r?.enabled,pending:!!r&&r.pending_expires>now(),remaining_backup_codes:count});}
+ if(m!=='POST')return null;await rate(env,'mfa-manage:'+actor.id,10,900);const b=await h.body(req);if(!b||typeof b!=='object'||Array.isArray(b))fail('بيانات غير صالحة');await currentPassword(env,actor,b.password,fail);
+ if(p==='/api/admin/mfa/setup'){
+  const factor=await env.DB.prepare('SELECT enabled FROM admin_second_factors WHERE user_id=?').bind(actor.id).first();if(factor?.enabled)fail('المصادقة مفعلة بالفعل. لا يعاد إصدار سرها من هذه الجلسة',409);
+  const secret=base32(crypto.getRandomValues(new Uint8Array(20))),encrypted=await encryptMFA(env,actor.id,secret);await env.DB.prepare('INSERT INTO admin_second_factors(user_id,pending_secret,pending_expires) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET pending_secret=excluded.pending_secret,pending_expires=excluded.pending_expires,version=version+1').bind(actor.id,encrypted,now()+300).run();
+  return json({secret,uri:'otpauth://totp/'+encodeURIComponent('Coffee Royal:'+actor.name+' '+actor.id.slice(0,8))+'?secret='+secret+'&issuer=Coffee%20Royal&algorithm=SHA1&digits=6&period=30',expires_in:300});
+ }
+ if(p==='/api/admin/mfa/confirm'){
+  const f=await env.DB.prepare('SELECT * FROM admin_second_factors WHERE user_id=?').bind(actor.id).first();if(!f||f.enabled||!f.pending_secret||f.pending_expires<=now())fail('انتهت جلسة إعداد المصادقة أو تغيّرت',409);const secret=await decrypt(env,actor.id,f.pending_secret),counter=await counterFor(secret,b.otp);if(counter===null)fail('رمز التطبيق غير صحيح',401);const claim=crypto.randomUUID(),codes=await newCodes(env,actor.id,claim);
+  const result=await env.DB.batch([env.DB.prepare('UPDATE admin_second_factors SET secret=pending_secret,pending_secret=NULL,pending_expires=0,enabled=1,last_counter=?,version=version+1,operation_nonce=? WHERE user_id=? AND version=? AND enabled=0 AND pending_expires>? RETURNING user_id').bind(counter,claim,actor.id,f.version,now()),...codes.statements]);if(!result[0].meta.changes)fail('تغيّر إعداد المصادقة. حدّث الصفحة',409);
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id=? AND token_hash!=?').bind(actor.id,actor.session_hash).run();await audit(env,actor,'mfa_enabled');return json({ok:true,backup_codes:codes.display});
+ }
+ if(['/api/admin/mfa/disable','/api/admin/mfa/recovery'].includes(p)){
+  if(!await checkMFA(env,actor.id,b.otp,b.backup_code,fail))fail('المصادقة الثنائية ليست مفعلة',409);
+  if(p.endsWith('/disable')){await env.DB.prepare('DELETE FROM admin_second_factors WHERE user_id=?').bind(actor.id).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=? AND token_hash!=?').bind(actor.id,actor.session_hash).run();await audit(env,actor,'mfa_disabled');return json({ok:true});}
+  const f=await env.DB.prepare('SELECT version FROM admin_second_factors WHERE user_id=? AND enabled=1').bind(actor.id).first();if(!f)fail('تغيّر إعداد المصادقة',409);const claim=crypto.randomUUID(),codes=await newCodes(env,actor.id,claim);const result=await env.DB.batch([env.DB.prepare('UPDATE admin_second_factors SET version=version+1,operation_nonce=? WHERE user_id=? AND version=? AND enabled=1').bind(claim,actor.id,f.version),env.DB.prepare('DELETE FROM admin_recovery_codes WHERE user_id=? AND EXISTS(SELECT 1 FROM admin_second_factors WHERE user_id=? AND operation_nonce=?)').bind(actor.id,actor.id,claim),...codes.statements]);if(!result[0].meta.changes)fail('تغيّر إعداد المصادقة، حدّث الصفحة',409);await audit(env,actor,'mfa_recovery_rotated');return json({ok:true,backup_codes:codes.display});
+ }
+ return null;
+}

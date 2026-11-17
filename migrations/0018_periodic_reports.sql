@@ -1,0 +1,4 @@
+CREATE TABLE report_schedules(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL,period TEXT NOT NULL CHECK(period IN('daily','weekly','monthly')),branch_id TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 1,next_due INTEGER NOT NULL,lease_until INTEGER NOT NULL DEFAULT 0);
+CREATE TRIGGER royal_report_quota BEFORE INSERT ON report_schedules WHEN NOT EXISTS(SELECT 1 FROM report_schedules WHERE id=NEW.id) AND (SELECT COUNT(*) FROM report_schedules WHERE user_id=NEW.user_id)>=3 BEGIN SELECT RAISE(ABORT,'report_quota'); END;
+CREATE TABLE report_snapshots(id TEXT PRIMARY KEY,schedule_id TEXT NOT NULL REFERENCES report_schedules(id) ON DELETE CASCADE,period_key TEXT NOT NULL,data TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(schedule_id,period_key));
+CREATE INDEX report_due ON report_schedules(enabled,next_due);

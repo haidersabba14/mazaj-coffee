@@ -13,6 +13,7 @@ struct ErrorReply: Decodable { let error: String }
     @Published var data: RoyalData?
     @Published var error = ""
     @Published var notice = ""
+    @Published var needsSecondFactor = false
     @Published var busy = false
     @Published var locked = true
     @Published var preferences = RoyalPreferences()
@@ -45,6 +46,7 @@ struct ErrorReply: Decodable { let error: String }
         if let body { req.httpMethod="POST";req.setValue("application/json",forHTTPHeaderField:"Content-Type");req.httpBody=try JSONSerialization.data(withJSONObject:body) }
         let (data,response) = try await session.data(for:req)
         guard let http = response as? HTTPURLResponse else { throw APIError(message:"تعذر الاتصال") }
+        if http.statusCode==428 {needsSecondFactor=true}
         if http.statusCode==401 { user=nil;locked=true;cookie=nil;SessionVault.clear() }
         guard (200...299).contains(http.statusCode) else { throw APIError(message:(try? JSONDecoder().decode(ErrorReply.self,from:data).error) ?? "تعذر إتمام العملية") }
         if let value=http.value(forHTTPHeaderField:"Set-Cookie"),let first=value.components(separatedBy:";").first, first.hasPrefix("session=") { cookie=first;SessionVault.save(first) }
@@ -58,15 +60,15 @@ struct ErrorReply: Decodable { let error: String }
     func downloadReport(_ query:String) async throws -> URL {
         let data=try await call("admin/export?format=xlsx&"+query);let file=FileManager.default.temporaryDirectory.appendingPathComponent("CoffeeRoyal-Report.xlsx");try data.write(to:file,options:.atomic);return file
     }
-    func login(username: String,password: String) async {
+    func login(username: String,password: String,otp:String="",backupCode:String="") async {
         guard !busy else { return };busy=true;error="";defer{busy=false}
-        do { _=try await call("login",body:["username":username,"password":password,"device_name":UIDevice.current.name+" · iOS"]);locked=false;try await load();try await loadPreferences() }
+        do { _=try await call("login",body:["username":username,"password":password,"otp":otp,"backup_code":backupCode,"device_name":UIDevice.current.name+" · iOS"]);locked=false;try await load();try await loadPreferences();needsSecondFactor=false }
         catch { self.error=error.localizedDescription }
     }
     func unlock() async {
         guard savedSession,await SessionVault.unlock() else { error="تعذر فتح الجلسة. يمكنك تسجيل الدخول بكلمة المرور.";return }
         cookie=SessionVault.read();locked=false
-        do { try await load();try await loadPreferences() }catch{self.error=error.localizedDescription;locked=true}
+        do { try await load();try await loadPreferences();needsSecondFactor=false }catch{self.error=error.localizedDescription;locked=true}
     }
     func lock() { if user != nil { locked=true } }
     private func load() async throws {

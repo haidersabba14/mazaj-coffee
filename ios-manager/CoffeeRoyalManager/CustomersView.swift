@@ -10,6 +10,8 @@ struct RoyalCustomer: Decodable, Identifiable {
     let order_count: Int
     let last_order_at: Double?
     let card_number: String?
+    let birthday_month:Int?
+    let birthday_day:Int?
     var isBlocked: Bool { blocked == 1 }
 }
 struct CustomersReply: Decodable {
@@ -26,6 +28,7 @@ struct CustomersView: View {
     @State private var loading = false
     @State private var pending: RoyalCustomer?
     @State private var confirmingSessions = false
+    @State private var birthday = false
     @State private var requestID = UUID()
     var body: some View {
         List {
@@ -45,8 +48,9 @@ struct CustomersView: View {
                     if let date = customer.last_order_at { Text("آخر طلب: " + Date(timeIntervalSince1970: date).formatted()).font(.caption).foregroundStyle(.secondary) }
                     if let card = customer.card_number { Text("بطاقة الولاء: " + card).font(.caption) }
                     HStack {
-                        Button(customer.isBlocked ? "تفعيل الحساب" : "إيقاف الحساب") { pending = customer; confirmingSessions = false }.buttonStyle(.bordered)
-                        Button("إلغاء جلساته") { pending = customer; confirmingSessions = true }.buttonStyle(.bordered)
+                        Button(customer.isBlocked ? "تفعيل الحساب" : "إيقاف الحساب") { pending = customer; confirmingSessions = false; birthday=false }.buttonStyle(.bordered)
+                        Button("إلغاء جلساته") { pending = customer; confirmingSessions = true; birthday=false }.buttonStyle(.bordered)
+                    if customer.birthday_month != nil && customer.birthday_day != nil && customer.card_number != nil{Button("هدية الميلاد"){pending=customer;confirmingSessions=false;birthday=true}.buttonStyle(.bordered)}
                     }.font(.caption).disabled(loading || store.busy)
                 }.padding(.vertical, 8)
             }
@@ -66,16 +70,17 @@ struct CustomersView: View {
         .onSubmit(of: .search) { offset = 0; Task { await load() } }
         .task { await load() }
         .refreshable { await load() }
-        .alert(confirmingSessions ? "إلغاء جلسات العميل؟" : "تغيير حالة الحساب؟", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
+        .alert(birthday ? "اعتماد هدية الميلاد بمشروبين؟" : confirmingSessions ? "إلغاء جلسات العميل؟" : "تغيير حالة الحساب؟", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
             Button("إلغاء", role: .cancel) { pending = nil }
             Button("تأكيد", role: .destructive) {
                 guard let customer = pending else { return }
                 let sessions = confirmingSessions
+                let grantBirthday=birthday
                 pending = nil
                 Task {
-                    let path = sessions ? "customer-sessions" : "customer-block"
+                    let path = grantBirthday ? "birthday-gift" : sessions ? "customer-sessions" : "customer-block"
                     var payload: [String: Any] = ["id": customer.id]
-                    if !sessions { payload["blocked"] = !customer.isBlocked }
+                    if !sessions && !grantBirthday { payload["blocked"] = !customer.isBlocked }
                     if await store.action(path, payload) { await load() }
                 }
             }

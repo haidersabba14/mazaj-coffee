@@ -44,3 +44,15 @@ extension ManagerTests {
         XCTAssertNil(reply.customers[0].card_number)
     }
 }
+extension ManagerTests {
+    func testAdvancedSecurityAndReportsDecode() throws {
+        let status=try JSONDecoder().decode(MFAStatus.self,from:Data(#"{"enabled":true,"remaining_backup_codes":7}"#.utf8))
+        XCTAssertTrue(status.enabled);XCTAssertEqual(status.remaining_backup_codes,7)
+        let schedule=try JSONDecoder().decode(ReportSchedule.self,from:Data(#"{"id":"r1","name":"تقرير","period":"weekly","branch_id":"main","enabled":1,"next_due":1795400400}"#.utf8))
+        XCTAssertEqual(schedule.period,"weekly");XCTAssertEqual(schedule.enabled,1)
+    }
+    func testWeeklyHoursDecodeClosedDay() throws {
+        let day=try JSONDecoder().decode(BranchDay.self,from:Data(#"{"branch_id":"main","weekday":5,"opening_minute":900,"closing_minute":1440,"closed":1}"#.utf8))
+        XCTAssertEqual(day.weekday,5);XCTAssertEqual(day.opening_minute,900);XCTAssertEqual(day.closed,1)
+    }
+}
