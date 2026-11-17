@@ -44,7 +44,7 @@ $('#back-to-top').onclick=()=>window.scrollTo({top:0,behavior:matchMedia('(prefe
 let initialDrinkHandled=false;
 
 function add(id){if(redeemMode){if(cart.reduce((n,i)=>n+i.quantity,0)>=2){toast('اختر مشروبين فقط للمكافأة، أو احذف اختيارًا من السلة');return false;}const item=cart.find(i=>i.id===id);if(item)item.quantity++;else cart.push({id,quantity:1});}else cart=[{id,quantity:1}];pending=null;const selected=catalog.find(p=>p.id===id);if(selected&&$('#checkout').elements.temperature)$('#checkout').elements.temperature.value=selected.category==='cold'?'cold':'hot';syncCartSugar();saveCartOptions();save();toast('تم اختيار مشروبك — مشروب واحد في كل طلب');}
-function checkoutState(){const ready=cart.reduce((n,i)=>n+i.quantity,0)===(redeemMode?2:1)&&settings.open&&settings.configured&&window.royalPlanningValid!==false&&window.royalGroupValid!==false&&!!turnstileToken&&!submitting;$('#confirm').disabled=!ready;}
+function checkoutState(){const ready=cart.reduce((n,i)=>n+i.quantity,0)===(redeemMode?2:1)&&(settings.open||($('#checkout').elements.order_time_mode?.value==='scheduled'&&settings.accepting&&!settings.maintenance))&&settings.configured&&window.royalPlanningValid!==false&&window.royalGroupValid!==false&&!!turnstileToken&&!submitting;$('#confirm').disabled=!ready;}
 async function ensureTurnstile(){
  if(!settings.configured)return;
  try{

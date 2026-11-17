@@ -1,5 +1,5 @@
 export const preferenceChoices={theme:['dark','light','system'],cards:['normal','compact','rounded'],view:['board','list'],tone:['royal','bell','bright'],background:['forest','charcoal','coffee'],font:['system','serif','rounded'],icons:['outline','filled']};
-export const sectionChoices=['orders','kitchen','pickup','products','loyalty','notifications','report','team','audit','settings','appearance','devices','management','ingredients','archives','customers','planning','seasons','security','restore','gifts','branches','images'];
+export const sectionChoices=['orders','kitchen','pickup','products','loyalty','notifications','report','team','audit','settings','appearance','devices','management','ingredients','archives','customers','periodic','planning','seasons','security','restore','gifts','branches','images'];
 export const shortcutChoices=['accepted','preparing','ready','delivered','cancelled','call'];
 export const metricChoices=['daily','weekly','waiting','preparing','ready'];
 export function validatePreferences(input,fail){

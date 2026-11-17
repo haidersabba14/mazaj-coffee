@@ -69,3 +69,14 @@ test('البحث الصوتي يبدأ بتفاعل العميل ولا يعرض
  assert.equal(d.querySelector('#voice-search').hidden,false);assert.equal(active,undefined);d.querySelector('#voice-search').click();assert.equal(active.started,true);assert.equal(active.lang,'ar-BH');active.onresult({results:[[{transcript:'أمريكانو'}]]});assert.equal(d.querySelectorAll('.product').length,2);active.onend();assert.equal(d.querySelector('#voice-search').getAttribute('aria-pressed'),'false');d.querySelector('#voice-search').click();active.onerror();assert.match(d.querySelector('#voice-status').textContent,/تعذر/);assert.equal(d.querySelector('#drink-search').value,'أمريكانو');
  }finally{w.close();}
 });
+
+test('واجهة الجدولة تسمح بموعد صالح قبل الفتح وتبقى مغلقة إذا توقف الاستقبال',async()=>{
+ const dom=await setup(),w=dom.window,d=w.document;try{
+  d.querySelector('[data-add=cappuccino]').click();vm.runInContext('settings.open=false;settings.accepting=1;settings.maintenance=0;turnstileToken="verified"',dom.getInternalVMContext());const slot=Math.ceil(Date.now()/900000)*900+3600;let receiving=true;
+  w.fetch=async()=>({ok:true,json:async()=>({now_open:false,receiving,slots:[{at:slot}],schedule_days:7})});vm.runInContext(await readFile('public/advanced-store.js','utf8'),dom.getInternalVMContext());w.dispatchEvent(new w.Event('royal-catalog-updated'));await new Promise(r=>setTimeout(r,20));const radio=d.querySelector('[name=order_time_mode][value=scheduled]');radio.checked=true;radio.dispatchEvent(new w.Event('change',{bubbles:true}));const select=d.querySelector('#scheduled-at');select.value=String(slot);select.dispatchEvent(new w.Event('change',{bubbles:true}));assert.equal(d.querySelector('#confirm').disabled,false);
+  receiving=false;w.dispatchEvent(new w.Event('royal-catalog-updated'));await new Promise(r=>setTimeout(r,20));assert.equal(d.querySelector('#confirm').disabled,true);
+ }finally{w.close();}
+});
+test('غياب WebGL يظهر قيدًا واضحًا ويحافظ على صورة المشروب',async()=>{
+ const dom=await setup(),w=dom.window,d=w.document;try{w.matchMedia=()=>({matches:true});w.HTMLCanvasElement.prototype.getContext=()=>null;vm.runInContext(await readFile('public/cup-3d.js','utf8'),dom.getInternalVMContext());d.querySelector('[data-preview=cappuccino]').click();d.querySelector('#cup-3d-open').click();assert.equal(d.querySelector('#cup-3d-dialog').open,true);assert.equal(d.querySelector('#cup-3d-canvas').hidden,true);assert.match(d.querySelector('#cup-3d-status').textContent,/غير متاح/);assert.equal(d.querySelector('#preview-image').getAttribute('src'),'/images/cappuccino.webp');}finally{w.close();}
+});
